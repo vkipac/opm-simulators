@@ -28,6 +28,7 @@
 #include <opm/simulators/flow/flux/FluxRegions.hpp>
 
 #include <array>
+#include <filesystem>
 #include <stdexcept>
 #include <vector>
 
@@ -158,4 +159,40 @@ BOOST_AUTO_TEST_CASE(ValidatesReportStepVectorSizes)
         {{1.0}, {2.0}},
         {0.0, 0.0}),
       std::invalid_argument);
+  }
+
+  BOOST_AUTO_TEST_CASE(WritesFluxFileThroughFluxFileIo)
+  {
+    const std::array<int, 3> dims{2, 1, 1};
+    std::vector<int> regionValues(dims[0] * dims[1] * dims[2], 0);
+    regionValues[globalIndex(dims, 1, 1, 1)] = 4;
+
+    const auto regions = Opm::FluxRegions::extract(dims, regionValues);
+    BOOST_REQUIRE_EQUAL(regions.size(), 1U);
+
+    Opm::FluxDumper dumper("PARENT", 4, dims, regions.front(),
+                 Opm::EclIO::FluxFile::Mode::Flux,
+                 Opm::EclIO::FluxFile::Sampling::Instant,
+                 static_cast<int>(Opm::EclIO::FluxFile::Phase::Oil));
+
+    Opm::FluxDumper::ReportStepData step;
+    step.reportStep = 0;
+    step.simStep = 0;
+    step.startTime = 0.0;
+    step.stepLength = 1.0;
+    step.rates = {12.5};
+    dumper.appendReportStep(step);
+
+    const auto outPath = std::filesystem::path{"test_fluxdumper_roundtrip.FLUX"};
+    dumper.write(outPath.string(), false);
+
+    const auto loaded = Opm::EclIO::FluxFile::read(outPath.string());
+    BOOST_CHECK_EQUAL(loaded.header.parentNx, 2);
+    BOOST_CHECK_EQUAL(loaded.header.numBoundaryFaces, 1);
+    BOOST_CHECK_EQUAL(loaded.header.numReportSteps, 1);
+    BOOST_REQUIRE_EQUAL(loaded.reportSteps.size(), 1U);
+    BOOST_REQUIRE_EQUAL(loaded.reportSteps[0].rates.size(), 1U);
+    BOOST_CHECK_CLOSE(loaded.reportSteps[0].rates[0], 12.5, 1e-12);
+
+    std::filesystem::remove(outPath);
   }
