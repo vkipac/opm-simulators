@@ -21,6 +21,7 @@
 
 #include <opm/common/ErrorMacros.hpp>
 
+#include <algorithm>
 #include <sstream>
 #include <utility>
 
@@ -86,6 +87,57 @@ FluxDumper::FluxDumper(std::string parentCaseName,
                 transmissibility,
             });
     }
+}
+
+std::vector<double> FluxDumper::aggregateRates(
+    const Sampling sampling,
+    const std::vector<std::vector<double>>& rateSnapshots,
+    const std::vector<double>& timeWeights)
+{
+    if (rateSnapshots.empty()) {
+        OPM_THROW(std::invalid_argument, "FluxDumper::aggregateRates: rateSnapshots must not be empty");
+    }
+
+    const auto expectedSize = rateSnapshots.front().size();
+    for (const auto& snapshot : rateSnapshots) {
+        if (snapshot.size() != expectedSize) {
+            OPM_THROW(std::invalid_argument,
+                      "FluxDumper::aggregateRates: all snapshots must have identical size");
+        }
+    }
+
+    if (sampling == Sampling::Instant) {
+        return rateSnapshots.back();
+    }
+
+    if (rateSnapshots.size() != timeWeights.size()) {
+        OPM_THROW(std::invalid_argument,
+                  "FluxDumper::aggregateRates: timeWeights size must match number of snapshots");
+    }
+
+    double totalWeight = 0.0;
+    for (const auto weight : timeWeights) {
+        if (weight < 0.0) {
+            OPM_THROW(std::invalid_argument,
+                      "FluxDumper::aggregateRates: time weights must be non-negative");
+        }
+        totalWeight += weight;
+    }
+
+    if (totalWeight <= 0.0) {
+        OPM_THROW(std::invalid_argument,
+                  "FluxDumper::aggregateRates: total time weight must be positive");
+    }
+
+    std::vector<double> out(expectedSize, 0.0);
+    for (std::size_t t = 0; t < rateSnapshots.size(); ++t) {
+        const auto weight = timeWeights[t] / totalWeight;
+        for (std::size_t i = 0; i < expectedSize; ++i) {
+            out[i] += rateSnapshots[t][i] * weight;
+        }
+    }
+
+    return out;
 }
 
 void FluxDumper::appendReportStep(const ReportStepData& stepData)

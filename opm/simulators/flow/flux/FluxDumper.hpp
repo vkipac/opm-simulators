@@ -59,6 +59,11 @@ public:
                int phaseMask,
                const std::vector<double>& boundaryTransmissibilities = {});
 
+    static std::vector<double> aggregateRates(
+        Sampling sampling,
+        const std::vector<std::vector<double>>& rateSnapshots,
+        const std::vector<double>& timeWeights);
+
     void appendReportStep(const ReportStepData& stepData);
     void write(const std::string& filename, bool formatted = false) const;
 

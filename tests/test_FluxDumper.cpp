@@ -104,3 +104,58 @@ BOOST_AUTO_TEST_CASE(ValidatesReportStepVectorSizes)
     bad.rates = {1.0, 2.0};
     BOOST_CHECK_THROW(dumper.appendReportStep(bad), std::invalid_argument);
 }
+
+  BOOST_AUTO_TEST_CASE(AggregateRatesSupportsAveragedAndInstantSampling)
+  {
+    const std::vector<std::vector<double>> snapshots{
+      {2.0, 10.0},
+      {6.0, 4.0},
+    };
+
+    const auto instant = Opm::FluxDumper::aggregateRates(
+      Opm::EclIO::FluxFile::Sampling::Instant,
+      snapshots,
+      {});
+    BOOST_REQUIRE_EQUAL(instant.size(), 2U);
+    BOOST_CHECK_CLOSE(instant[0], 6.0, 1e-12);
+    BOOST_CHECK_CLOSE(instant[1], 4.0, 1e-12);
+
+    const auto averaged = Opm::FluxDumper::aggregateRates(
+      Opm::EclIO::FluxFile::Sampling::Averaged,
+      snapshots,
+      {1.0, 3.0});
+    BOOST_REQUIRE_EQUAL(averaged.size(), 2U);
+    BOOST_CHECK_CLOSE(averaged[0], 5.0, 1e-12);
+    BOOST_CHECK_CLOSE(averaged[1], 5.5, 1e-12);
+  }
+
+  BOOST_AUTO_TEST_CASE(AggregateRatesValidatesInputs)
+  {
+    BOOST_CHECK_THROW(
+      Opm::FluxDumper::aggregateRates(
+        Opm::EclIO::FluxFile::Sampling::Averaged,
+        {},
+        {}),
+      std::invalid_argument);
+
+    BOOST_CHECK_THROW(
+      Opm::FluxDumper::aggregateRates(
+        Opm::EclIO::FluxFile::Sampling::Averaged,
+        {{1.0}, {1.0, 2.0}},
+        {1.0, 1.0}),
+      std::invalid_argument);
+
+    BOOST_CHECK_THROW(
+      Opm::FluxDumper::aggregateRates(
+        Opm::EclIO::FluxFile::Sampling::Averaged,
+        {{1.0}, {2.0}},
+        {2.0}),
+      std::invalid_argument);
+
+    BOOST_CHECK_THROW(
+      Opm::FluxDumper::aggregateRates(
+        Opm::EclIO::FluxFile::Sampling::Averaged,
+        {{1.0}, {2.0}},
+        {0.0, 0.0}),
+      std::invalid_argument);
+  }
