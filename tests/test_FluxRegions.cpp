@@ -23,6 +23,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <opm/input/eclipse/EclipseState/Grid/FaceDir.hpp>
 #include <opm/simulators/flow/flux/FluxRegions.hpp>
 
 #include <array>
@@ -82,4 +83,73 @@ BOOST_AUTO_TEST_CASE(RejectsWrongRegionVectorSize)
 {
     const std::array<int, 3> dims{2, 2, 1};
     BOOST_CHECK_THROW(Opm::FluxRegions::extract(dims, std::vector<int>{1, 2, 3}), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(ExtractsCartesianBoundaryFaces)
+{
+    const std::array<int, 3> dims{4, 1, 1};
+    std::vector<int> regions(dims[0] * dims[1] * dims[2], 0);
+
+    regions[globalIndex(dims, 2, 1, 1)] = 9;
+    regions[globalIndex(dims, 3, 1, 1)] = 9;
+
+    const auto extracted = Opm::FluxRegions::extract(dims, regions);
+    BOOST_REQUIRE_EQUAL(extracted.size(), 1U);
+
+    const auto& region = extracted.front();
+    BOOST_REQUIRE_EQUAL(region.boundaryFaces.size(), 2U);
+
+    const auto left = Opm::FluxRegions::BoundaryFace{
+        0,
+        globalIndex(dims, 2, 1, 1),
+        globalIndex(dims, 1, 1, 1),
+        Opm::FaceDir::XMinus,
+        false,
+    };
+    const auto right = Opm::FluxRegions::BoundaryFace{
+        1,
+        globalIndex(dims, 3, 1, 1),
+        globalIndex(dims, 4, 1, 1),
+        Opm::FaceDir::XPlus,
+        false,
+    };
+
+    BOOST_CHECK(region.boundaryFaces[0] == left);
+    BOOST_CHECK(region.boundaryFaces[1] == right);
+}
+
+BOOST_AUTO_TEST_CASE(ExtractsNncBoundaryFaces)
+{
+    const std::array<int, 3> dims{3, 1, 1};
+    std::vector<int> regions(dims[0] * dims[1] * dims[2], 0);
+
+    regions[globalIndex(dims, 1, 1, 1)] = 7;
+
+    const std::vector<std::array<int, 2>> nnc{
+        {globalIndex(dims, 1, 1, 1), globalIndex(dims, 3, 1, 1)}
+    };
+
+    const auto extracted = Opm::FluxRegions::extract(dims, regions, nnc);
+    BOOST_REQUIRE_EQUAL(extracted.size(), 1U);
+
+    const auto& region = extracted.front();
+    BOOST_REQUIRE_EQUAL(region.boundaryFaces.size(), 2U);
+
+    const auto cartesianFace = Opm::FluxRegions::BoundaryFace{
+        0,
+        globalIndex(dims, 1, 1, 1),
+        globalIndex(dims, 2, 1, 1),
+        Opm::FaceDir::XPlus,
+        false,
+    };
+    const auto nncFace = Opm::FluxRegions::BoundaryFace{
+        0,
+        globalIndex(dims, 1, 1, 1),
+        globalIndex(dims, 3, 1, 1),
+        Opm::FaceDir::Unknown,
+        true,
+    };
+
+    BOOST_CHECK(region.boundaryFaces[0] == cartesianFace);
+    BOOST_CHECK(region.boundaryFaces[1] == nncFace);
 }

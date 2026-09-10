@@ -22,9 +22,226 @@
 #include <opm/common/ErrorMacros.hpp>
 
 #include <algorithm>
+#include <cstddef>
+#include <limits>
 #include <map>
+#include <set>
+#include <unordered_set>
 
 namespace Opm {
+
+namespace {
+
+struct GlobalIJK {
+    int i = 0;
+    int j = 0;
+    int k = 0;
+};
+
+GlobalIJK decodeGlobal(const std::array<int, 3>& dims, const int globalIndex)
+{
+    const int k = globalIndex / (dims[0] * dims[1]);
+    const int rem = globalIndex % (dims[0] * dims[1]);
+    const int j = rem / dims[0];
+    const int i = rem % dims[0];
+    return {i + 1, j + 1, k + 1};
+}
+
+int encodeGlobal(const std::array<int, 3>& dims, const GlobalIJK& ijk)
+{
+    return FluxRegions::cartesianIndex(dims, ijk.i - 1, ijk.j - 1, ijk.k - 1);
+}
+
+bool inBounds(const std::array<int, 3>& dims, const GlobalIJK& ijk)
+{
+    return (ijk.i >= 1 && ijk.i <= dims[0])
+        && (ijk.j >= 1 && ijk.j <= dims[1])
+        && (ijk.k >= 1 && ijk.k <= dims[2]);
+}
+
+GlobalIJK shifted(const GlobalIJK& ijk, FaceDir::DirEnum dir)
+{
+    switch (dir) {
+    case FaceDir::XPlus:
+        return {ijk.i + 1, ijk.j, ijk.k};
+    case FaceDir::XMinus:
+        return {ijk.i - 1, ijk.j, ijk.k};
+    case FaceDir::YPlus:
+        return {ijk.i, ijk.j + 1, ijk.k};
+    case FaceDir::YMinus:
+        return {ijk.i, ijk.j - 1, ijk.k};
+    case FaceDir::ZPlus:
+        return {ijk.i, ijk.j, ijk.k + 1};
+    case FaceDir::ZMinus:
+        return {ijk.i, ijk.j, ijk.k - 1};
+    case FaceDir::Unknown:
+        break;
+    }
+
+    return ijk;
+}
+
+FaceDir::DirEnum directionToNeighbour(const GlobalIJK& from, const GlobalIJK& to)
+{
+    if (to.i == from.i + 1 && to.j == from.j && to.k == from.k) {
+        return FaceDir::XPlus;
+    }
+    if (to.i == from.i - 1 && to.j == from.j && to.k == from.k) {
+        return FaceDir::XMinus;
+    }
+    if (to.j == from.j + 1 && to.i == from.i && to.k == from.k) {
+        return FaceDir::YPlus;
+    }
+    if (to.j == from.j - 1 && to.i == from.i && to.k == from.k) {
+        return FaceDir::YMinus;
+    }
+    if (to.k == from.k + 1 && to.i == from.i && to.j == from.j) {
+        return FaceDir::ZPlus;
+    }
+    if (to.k == from.k - 1 && to.i == from.i && to.j == from.j) {
+        return FaceDir::ZMinus;
+    }
+
+    return FaceDir::Unknown;
+}
+
+std::vector<FaceDir::DirEnum> cartesianDirections()
+{
+    return {
+        FaceDir::XMinus,
+        FaceDir::XPlus,
+        FaceDir::YMinus,
+        FaceDir::YPlus,
+        FaceDir::ZMinus,
+        FaceDir::ZPlus,
+    };
+}
+
+std::unordered_set<int> makeSelectionSet(const FluxRegions::Region& region)
+{
+    return {region.selectedGlobalCells.begin(), region.selectedGlobalCells.end()};
+}
+
+std::map<int, std::vector<int>> buildGlobalToLocal(const FluxRegions::Region& region)
+{
+    std::map<int, std::vector<int>> map;
+    for (std::size_t local = 0; local < region.localToGlobal.size(); ++local) {
+        const auto global = region.localToGlobal[local];
+        if (global >= 0) {
+            map[global].push_back(static_cast<int>(local));
+        }
+    }
+    return map;
+}
+
+void fillCartesianBoundaryFaces(const std::array<int, 3>& dims,
+                                FluxRegions::Region& region,
+                                const std::unordered_set<int>& selected)
+{
+    const auto globalToLocal = buildGlobalToLocal(region);
+    for (const auto interiorGlobal : region.selectedGlobalCells) {
+        const auto interiorIt = globalToLocal.find(interiorGlobal);
+        if (interiorIt == globalToLocal.end() || interiorIt->second.empty()) {
+            continue;
+        }
+
+        const int interiorLocal = interiorIt->second.front();
+        const auto interiorIJK = decodeGlobal(dims, interiorGlobal);
+
+        for (const auto dir : cartesianDirections()) {
+            const auto nIJK = shifted(interiorIJK, dir);
+            if (!inBounds(dims, nIJK)) {
+                continue;
+            }
+
+            const auto neighbourGlobal = encodeGlobal(dims, nIJK);
+            if (selected.count(neighbourGlobal) != 0) {
+                continue;
+            }
+
+            region.boundaryFaces.push_back(
+                FluxRegions::BoundaryFace{
+                    interiorLocal,
+                    interiorGlobal,
+                    neighbourGlobal,
+                    dir,
+                    false,
+                });
+        }
+    }
+}
+
+void fillNncBoundaryFaces(const std::array<int, 3>& dims,
+                          FluxRegions::Region& region,
+                          const std::unordered_set<int>& selected,
+                          const std::vector<std::array<int, 2>>& nncConnections)
+{
+    const auto globalToLocal = buildGlobalToLocal(region);
+    std::set<std::tuple<int, int, int>> seen;
+
+    auto addFace = [&](const int interiorGlobal, const int exteriorGlobal) {
+        if (selected.count(interiorGlobal) == 0 || selected.count(exteriorGlobal) != 0) {
+            return;
+        }
+
+        const auto localIt = globalToLocal.find(interiorGlobal);
+        if (localIt == globalToLocal.end() || localIt->second.empty()) {
+            return;
+        }
+
+        const auto interiorIJK = decodeGlobal(dims, interiorGlobal);
+        const auto exteriorIJK = decodeGlobal(dims, exteriorGlobal);
+        auto dir = directionToNeighbour(interiorIJK, exteriorIJK);
+
+        const auto key = std::make_tuple(localIt->second.front(), exteriorGlobal, static_cast<int>(dir));
+        if (!seen.insert(key).second) {
+            return;
+        }
+
+        region.boundaryFaces.push_back(
+            FluxRegions::BoundaryFace{
+                localIt->second.front(),
+                interiorGlobal,
+                exteriorGlobal,
+                dir,
+                true,
+            });
+    };
+
+    for (const auto& pair : nncConnections) {
+        addFace(pair[0], pair[1]);
+        addFace(pair[1], pair[0]);
+    }
+}
+
+void sortBoundaryFaces(std::vector<FluxRegions::BoundaryFace>& faces)
+{
+    std::sort(faces.begin(), faces.end(),
+              [](const auto& lhs, const auto& rhs) {
+                  if (lhs.interiorGlobalCell != rhs.interiorGlobalCell) {
+                      return lhs.interiorGlobalCell < rhs.interiorGlobalCell;
+                  }
+                  if (lhs.isNnc != rhs.isNnc) {
+                      return lhs.isNnc < rhs.isNnc;
+                  }
+                  if (lhs.direction != rhs.direction) {
+                      return lhs.direction < rhs.direction;
+                  }
+                  return lhs.exteriorGlobalCell < rhs.exteriorGlobalCell;
+              });
+}
+
+void buildBoundaryFaces(const std::array<int, 3>& dims,
+                        FluxRegions::Region& region,
+                        const std::vector<std::array<int, 2>>& nncConnections)
+{
+    const auto selected = makeSelectionSet(region);
+    fillCartesianBoundaryFaces(dims, region, selected);
+    fillNncBoundaryFaces(dims, region, selected, nncConnections);
+    sortBoundaryFaces(region.boundaryFaces);
+}
+
+} // namespace
 
 int FluxRegions::cartesianIndex(const std::array<int, 3>& dims,
                                 const int i,
@@ -41,6 +258,13 @@ int FluxRegions::localBoxIndex(const Box& box, const int i, const int j, const i
 
 std::vector<FluxRegions::Region> FluxRegions::extract(const std::array<int, 3>& dims,
                                                       const std::vector<int>& regionValues)
+{
+    return extract(dims, regionValues, {});
+}
+
+std::vector<FluxRegions::Region> FluxRegions::extract(const std::array<int, 3>& dims,
+                                                      const std::vector<int>& regionValues,
+                                                      const std::vector<std::array<int, 2>>& nncConnections)
 {
     const auto numCells = dims[0] * dims[1] * dims[2];
     if (static_cast<int>(regionValues.size()) != numCells) {
@@ -96,6 +320,8 @@ std::vector<FluxRegions::Region> FluxRegions::extract(const std::array<int, 3>& 
             const int i = rem % dims[0];
             region.localToGlobal[localBoxIndex(region.box, i + 1, j + 1, k + 1)] = globalIndex;
         }
+
+        buildBoundaryFaces(dims, region, nncConnections);
 
         regions.push_back(std::move(region));
     }

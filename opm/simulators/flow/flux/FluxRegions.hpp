@@ -20,6 +20,8 @@
 #ifndef OPM_FLUX_REGIONS_HPP
 #define OPM_FLUX_REGIONS_HPP
 
+#include <opm/input/eclipse/EclipseState/Grid/FaceDir.hpp>
+
 #include <array>
 #include <vector>
 
@@ -28,6 +30,16 @@ namespace Opm {
 class FluxRegions
 {
 public:
+    struct BoundaryFace {
+        int interiorLocalCell = -1;
+        int interiorGlobalCell = -1;
+        int exteriorGlobalCell = -1;
+        FaceDir::DirEnum direction = FaceDir::Unknown;
+        bool isNnc = false;
+
+        bool operator==(const BoundaryFace& other) const = default;
+    };
+
     struct Box {
         int i1 = 0;
         int i2 = 0;
@@ -48,12 +60,17 @@ public:
         Box box;
         std::vector<int> localToGlobal;
         std::vector<int> selectedGlobalCells;
+        std::vector<BoundaryFace> boundaryFaces;
 
         bool operator==(const Region& other) const = default;
     };
 
     static std::vector<Region> extract(const std::array<int, 3>& dims,
                                        const std::vector<int>& regionValues);
+
+    static std::vector<Region> extract(const std::array<int, 3>& dims,
+                                       const std::vector<int>& regionValues,
+                                       const std::vector<std::array<int, 2>>& nncConnections);
 
     static int cartesianIndex(const std::array<int, 3>& dims,
                               int i,
