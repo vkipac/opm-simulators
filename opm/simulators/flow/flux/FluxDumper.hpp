@@ -64,6 +64,11 @@ public:
         const std::vector<std::vector<double>>& rateSnapshots,
         const std::vector<double>& timeWeights);
 
+    ReportStepData makeZeroFluxStep(int reportStep,
+                                    int simStep,
+                                    double startTime,
+                                    double stepLength) const;
+
     void appendReportStep(const ReportStepData& stepData);
     void write(const std::string& filename, bool formatted = false) const;
 

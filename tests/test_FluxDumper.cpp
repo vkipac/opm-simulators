@@ -196,3 +196,32 @@ BOOST_AUTO_TEST_CASE(ValidatesReportStepVectorSizes)
 
     std::filesystem::remove(outPath);
   }
+
+BOOST_AUTO_TEST_CASE(BuildsZeroFluxStepWithExpectedSizes)
+{
+  const std::array<int, 3> dims{4, 1, 1};
+  std::vector<int> regionValues(dims[0] * dims[1] * dims[2], 0);
+  regionValues[globalIndex(dims, 2, 1, 1)] = 2;
+  regionValues[globalIndex(dims, 3, 1, 1)] = 2;
+
+  const auto regions = Opm::FluxRegions::extract(dims, regionValues);
+  BOOST_REQUIRE_EQUAL(regions.size(), 1U);
+
+  Opm::FluxDumper dumper("PARENT", 2, dims, regions.front(),
+               Opm::EclIO::FluxFile::Mode::Both,
+               Opm::EclIO::FluxFile::Sampling::Averaged,
+               static_cast<int>(Opm::EclIO::FluxFile::Phase::Oil)
+               | static_cast<int>(Opm::EclIO::FluxFile::Phase::Water));
+
+  const auto step = dumper.makeZeroFluxStep(4, 8, 12.0, 3.0);
+  BOOST_CHECK_EQUAL(step.reportStep, 4);
+  BOOST_CHECK_EQUAL(step.simStep, 8);
+  BOOST_CHECK_CLOSE(step.startTime, 12.0, 1e-12);
+  BOOST_CHECK_CLOSE(step.stepLength, 3.0, 1e-12);
+  BOOST_CHECK_EQUAL(step.rates.size(), 4U);
+  BOOST_CHECK_EQUAL(step.pressures.size(), 2U);
+  BOOST_CHECK_EQUAL(step.swat.size(), 2U);
+  BOOST_CHECK_EQUAL(step.sgas.size(), 2U);
+  BOOST_CHECK_EQUAL(step.rs.size(), 2U);
+  BOOST_CHECK_EQUAL(step.rv.size(), 2U);
+}

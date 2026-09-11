@@ -554,6 +554,8 @@ public:
         }
 
         if (this->collectOnIORank_.isIORank()) {
+            this->updateFluxDumpers_(reportStepNum, isSubStep);
+
             const Scalar curTime = simulator_.time() + simulator_.timeStepSize();
             const Scalar nextStepSize = simulator_.problem().nextTimeStepSize();
             std::optional<int> timeStepIdx;
@@ -1051,6 +1053,25 @@ private:
         OpmLog::note("DUMPFLUX bootstrap: initialized "
                      + std::to_string(this->fluxDumpers_.size())
                      + " region dumper(s) from FLUXREG");
+    }
+
+    void updateFluxDumpers_(const int reportStepNum, const bool isSubStep)
+    {
+        if (isSubStep || this->fluxDumpers_.empty()) {
+            return;
+        }
+
+        const auto simStep = simulator_.timeStepIndex();
+        const auto startTime = simulator_.time();
+        const auto stepLength = simulator_.timeStepSize();
+
+        for (auto& dumper : this->fluxDumpers_) {
+            dumper.appendReportStep(
+                dumper.makeZeroFluxStep(reportStepNum,
+                                        simStep,
+                                        startTime,
+                                        stepLength));
+        }
     }
 
     Simulator& simulator_;

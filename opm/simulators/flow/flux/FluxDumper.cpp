@@ -140,6 +140,33 @@ std::vector<double> FluxDumper::aggregateRates(
     return out;
 }
 
+FluxDumper::ReportStepData FluxDumper::makeZeroFluxStep(const int reportStep,
+                                                        const int simStep,
+                                                        const double startTime,
+                                                        const double stepLength) const
+{
+    ReportStepData step;
+    step.reportStep = reportStep;
+    step.simStep = simStep;
+    step.startTime = startTime;
+    step.stepLength = stepLength;
+
+    if (hasFluxMode(this->data_.header.mode)) {
+        step.rates.assign(this->expectedRateSize(), 0.0);
+    }
+
+    if (hasPressureMode(this->data_.header.mode)) {
+        const auto numFaces = this->numBoundaryFaces();
+        step.pressures.assign(numFaces, 0.0);
+        step.swat.assign(numFaces, 0.0);
+        step.sgas.assign(numFaces, 0.0);
+        step.rs.assign(numFaces, 0.0);
+        step.rv.assign(numFaces, 0.0);
+    }
+
+    return step;
+}
+
 void FluxDumper::appendReportStep(const ReportStepData& stepData)
 {
     this->validateStepData(stepData);
