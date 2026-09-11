@@ -1133,6 +1133,12 @@ private:
         const auto simStep = simulator_.timeStepIndex();
         const auto startTime = simulator_.time();
         const auto stepLength = simulator_.timeStepSize();
+        const auto pressurePhaseIdx = FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)
+            ? FluidSystem::oilPhaseIdx
+            : (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)
+               ? FluidSystem::gasPhaseIdx
+               : FluidSystem::waterPhaseIdx);
+        const auto& vanguard = this->simulator_.vanguard();
 
         for (auto& dumper : this->fluxDumpers_) {
             auto step = dumper.makeZeroFluxStep(reportStepNum,
@@ -1176,6 +1182,54 @@ private:
 
                         return -flows.getFlores(face.interiorGlobalCell, face.direction, comp);
                     });
+            }
+
+            if ((static_cast<int>(dumper.data().header.mode) & static_cast<int>(EclIO::FluxFile::Mode::Pressure)) != 0) {
+                step.pressures.clear();
+                step.swat.clear();
+                step.sgas.clear();
+                step.rs.clear();
+                step.rv.clear();
+                step.temperature.clear();
+
+                const auto& faces = dumper.data().boundaryFaces;
+                step.pressures.reserve(faces.size());
+                if (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)) {
+                    step.swat.reserve(faces.size());
+                }
+                if (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
+                    step.sgas.reserve(faces.size());
+                }
+                step.rs.reserve(faces.size());
+                step.rv.reserve(faces.size());
+
+                for (const auto& face : faces) {
+                    const auto compressedExterior = vanguard.compressedIndex(face.exteriorGlobalCell);
+                    if (compressedExterior < 0) {
+                        step.pressures.push_back(0.0);
+                        if (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)) {
+                            step.swat.push_back(0.0);
+                        }
+                        if (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
+                            step.sgas.push_back(0.0);
+                        }
+                        step.rs.push_back(0.0);
+                        step.rv.push_back(0.0);
+                        continue;
+                    }
+
+                    const auto& intQuants = *simulator_.model().cachedIntensiveQuantities(compressedExterior, /*timeIdx=*/0);
+                    const auto& fs = intQuants.fluidState();
+                    step.pressures.push_back(getValue(fs.pressure(pressurePhaseIdx)));
+                    if (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)) {
+                        step.swat.push_back(getValue(fs.saturation(FluidSystem::waterPhaseIdx)));
+                    }
+                    if (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
+                        step.sgas.push_back(getValue(fs.saturation(FluidSystem::gasPhaseIdx)));
+                    }
+                    step.rs.push_back(getValue(fs.Rs()));
+                    step.rv.push_back(getValue(fs.Rv()));
+                }
             }
 
             dumper.appendReportStep(step);

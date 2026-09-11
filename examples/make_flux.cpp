@@ -25,6 +25,7 @@
 #include <opm/input/eclipse/Parser/ErrorGuard.hpp>
 #include <opm/input/eclipse/Parser/ParseContext.hpp>
 #include <opm/input/eclipse/Parser/Parser.hpp>
+#include <opm/input/eclipse/Units/UnitSystem.hpp>
 #include <opm/io/eclipse/EclFile.hpp>
 #include <opm/io/eclipse/ERst.hpp>
 #include <opm/io/eclipse/ESmry.hpp>
@@ -32,19 +33,23 @@
 #include <opm/simulators/flow/flux/FluxRegions.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
 
 namespace fs = std::filesystem;
+constexpr double secondsPerDay = 24.0 * 60.0 * 60.0;
 
 struct Options {
     std::string parent;
@@ -70,13 +75,15 @@ struct SummaryPayload {
     std::vector<double> reportTimes;
 };
 
+using NncKey = std::pair<int, int>;
+
 void printUsage()
 {
     std::cout
         << "usage: make_flux --parent=<CASE|CASE.DATA> --mapping=<file> --output=<SECTOR.FLUX> [options]\n"
         << "\n"
         << "options:\n"
-        << "  --mode=<flux|pressure|both>         Boundary payload mode (default: flux; implemented: pressure)\n"
+        << "  --mode=<flux|pressure|both>         Boundary payload mode (default: flux; flux requires FLORES restart arrays)\n"
         << "  --sampling=<averaged|instant>        Flux sampling mode (default: averaged)\n"
         << "  --summary=<CASE|CASE.SMSPEC>         Optional parent summary override\n"
         << "\n"
@@ -295,6 +302,16 @@ Opm::EclIO::FluxFile::Sampling samplingFromString(const std::string& sampling)
     return Opm::EclIO::FluxFile::Sampling::Averaged;
 }
 
+bool hasFluxMode(const Opm::EclIO::FluxFile::Mode mode)
+{
+    return (static_cast<int>(mode) & static_cast<int>(Opm::EclIO::FluxFile::Mode::Flux)) != 0;
+}
+
+bool hasPressureMode(const Opm::EclIO::FluxFile::Mode mode)
+{
+    return (static_cast<int>(mode) & static_cast<int>(Opm::EclIO::FluxFile::Mode::Pressure)) != 0;
+}
+
 std::vector<int> parseMappingFile(const fs::path& mappingPath,
                                   const std::array<int, 3>& dims)
 {
@@ -428,6 +445,91 @@ double transmissibilityForFace(const Opm::FluxRegions::BoundaryFace& face,
     }
 }
 
+std::string rateArrayName(const Opm::EclIO::FluxFile::Phase phase,
+                          const Opm::FaceDir::DirEnum dir)
+{
+    std::string prefix;
+    switch (phase) {
+    case Opm::EclIO::FluxFile::Phase::Oil:
+        prefix = "FLROIL";
+        break;
+    case Opm::EclIO::FluxFile::Phase::Water:
+        prefix = "FLRWAT";
+        break;
+    case Opm::EclIO::FluxFile::Phase::Gas:
+        prefix = "FLRGAS";
+        break;
+    }
+
+    switch (dir) {
+    case Opm::FaceDir::XPlus:
+        return prefix + "I+";
+    case Opm::FaceDir::XMinus:
+        return prefix + "I-";
+    case Opm::FaceDir::YPlus:
+        return prefix + "J+";
+    case Opm::FaceDir::YMinus:
+        return prefix + "J-";
+    case Opm::FaceDir::ZPlus:
+        return prefix + "K+";
+    case Opm::FaceDir::ZMinus:
+        return prefix + "K-";
+    case Opm::FaceDir::Unknown:
+        break;
+    }
+
+    throw std::invalid_argument("unsupported face direction for FLUX-mode rate array lookup");
+}
+
+std::string nncRateArrayName(const Opm::EclIO::FluxFile::Phase phase)
+{
+    switch (phase) {
+    case Opm::EclIO::FluxFile::Phase::Oil:
+        return "FLROILN+";
+    case Opm::EclIO::FluxFile::Phase::Water:
+        return "FLRWATN+";
+    case Opm::EclIO::FluxFile::Phase::Gas:
+        return "FLRGASN+";
+    }
+
+    throw std::invalid_argument("unsupported phase for NNC FLUX-mode rate array lookup");
+}
+
+NncKey normalizedNncPair(const int c1, const int c2)
+{
+    return (c1 <= c2)
+        ? std::make_pair(c1, c2)
+        : std::make_pair(c2, c1);
+}
+
+std::map<NncKey, int> buildNncPairToIndex(const Opm::EclipseState& state)
+{
+    std::map<NncKey, int> pairToIndex;
+    int nncIndex = 0;
+
+    if (state.hasInputNNC()) {
+        const auto& inputNnc = state.getInputNNC().input();
+        for (const auto& nnc : inputNnc) {
+            pairToIndex.try_emplace(normalizedNncPair(static_cast<int>(nnc.cell1),
+                                                      static_cast<int>(nnc.cell2)),
+                                    nncIndex);
+            ++nncIndex;
+        }
+    }
+
+    if (state.hasPinchNNC()) {
+        const auto& pinchNnc = state.getPinchNNC();
+        for (const auto& nnc : pinchNnc) {
+            pairToIndex.try_emplace(normalizedNncPair(static_cast<int>(nnc.cell1),
+                                                      static_cast<int>(nnc.cell2)),
+                                    nncIndex);
+            ++nncIndex;
+        }
+    }
+
+    return pairToIndex;
+}
+
 SummaryPayload loadSummaryPayload(const fs::path& summaryPath)
 {
     Opm::EclIO::ESmry summary(summaryPath.string());
@@ -473,6 +575,18 @@ std::vector<double> optionalRestartArray(Opm::EclIO::ERst& restart,
     return {values.begin(), values.end()};
 }
 
+std::vector<double> requiredRestartRealArray(Opm::EclIO::ERst& restart,
+                                             const std::string& keyword,
+                                             const int reportStep)
+{
+    if (!restart.hasArray(keyword, reportStep)) {
+        throw std::invalid_argument("restart step " + std::to_string(reportStep)
+                                    + " is missing required array '" + keyword + "'");
+    }
+
+    return optionalRestartArray(restart, keyword, reportStep);
+}
+
 std::vector<double> requiredRestartArray(Opm::EclIO::ERst& restart,
                                          const std::string& keyword,
                                          const int reportStep)
@@ -487,6 +601,7 @@ std::vector<double> requiredRestartArray(Opm::EclIO::ERst& restart,
 
 void fillPressureStepData(Opm::FluxDumper::ReportStepData& step,
                           const Opm::FluxRegions::Region& region,
+                          const Opm::UnitSystem& unitSystem,
                           const std::vector<double>& pressure,
                           const std::vector<double>& swat,
                           const std::vector<double>& sgas,
@@ -529,7 +644,8 @@ void fillPressureStepData(Opm::FluxDumper::ReportStepData& step,
         }
 
         const auto exterior = static_cast<std::size_t>(face.exteriorGlobalCell);
-        step.pressures.push_back(pressure.at(exterior));
+        step.pressures.push_back(unitSystem.to_si(Opm::UnitSystem::measure::pressure,
+                              pressure.at(exterior)));
 
         if (waterActive) {
             step.swat.push_back(swat.at(exterior));
@@ -545,6 +661,68 @@ void fillPressureStepData(Opm::FluxDumper::ReportStepData& step,
         }
         if (hasTemperature) {
             step.temperature.push_back(temperature.at(exterior));
+        }
+    }
+}
+
+void fillFluxStepData(Opm::FluxDumper::ReportStepData& step,
+                      const Opm::FluxRegions::Region& region,
+                      Opm::EclIO::ERst& restart,
+                      const int reportStep,
+                      const int phaseMask,
+                      const std::map<NncKey, int>& nncPairToIndex)
+{
+    step.rates.clear();
+
+    const std::array phases{
+        Opm::EclIO::FluxFile::Phase::Oil,
+        Opm::EclIO::FluxFile::Phase::Water,
+        Opm::EclIO::FluxFile::Phase::Gas,
+    };
+
+    std::map<std::string, std::vector<double>> cachedArrays;
+    auto loadArray = [&](const std::string& name) -> const std::vector<double>&
+    {
+        const auto [it, inserted] = cachedArrays.try_emplace(name);
+        if (inserted) {
+            it->second = requiredRestartRealArray(restart, name, reportStep);
+        }
+        return it->second;
+    };
+
+    for (const auto& face : region.boundaryFaces) {
+        for (const auto phase : phases) {
+            if ((phaseMask & static_cast<int>(phase)) == 0) {
+                continue;
+            }
+
+            if (face.isNnc) {
+                const auto key = normalizedNncPair(face.interiorGlobalCell, face.exteriorGlobalCell);
+                const auto indexIt = nncPairToIndex.find(key);
+                if (indexIt == nncPairToIndex.end()) {
+                    throw std::invalid_argument("NNC boundary face not found in parent NNC list");
+                }
+
+                const auto& values = loadArray(nncRateArrayName(phase));
+                const auto nncIndex = static_cast<std::size_t>(indexIt->second);
+                if (nncIndex >= values.size()) {
+                    throw std::invalid_argument("NNC rate array is smaller than expected for parent NNC list");
+                }
+
+                const auto nncFlux = values[nncIndex];
+                step.rates.push_back((face.interiorGlobalCell == key.second) ? nncFlux : -nncFlux);
+                continue;
+            }
+
+            const auto& values = loadArray(rateArrayName(phase, face.direction));
+            const auto interior = static_cast<std::size_t>(face.interiorGlobalCell);
+            if (interior >= values.size()) {
+                throw std::invalid_argument("directional FLORES array is smaller than expected for parent grid");
+            }
+
+            // Restart directional face rates use the interior-cell face orientation.
+            // FLUX files store positive values into the sector, i.e. opposite sign.
+            step.rates.push_back(-values[interior]);
         }
     }
 }
@@ -567,16 +745,14 @@ int run(const Options& opt)
         throw std::invalid_argument("invalid --sampling value '" + opt.sampling + "' (expected averaged|instant)");
     }
 
-    if (opt.mode == "flux" || opt.mode == "both") {
-        throw std::invalid_argument("standalone flux-rate generation is not implemented yet; currently supported mode is --mode=pressure");
-    }
-
     const ParentInput parentInput = resolveParentInput(opt);
     Opm::OpmLog::setupSimpleDefaultLogging();
 
     const auto deck = loadDeck(parentInput.deckPath);
     const Opm::EclipseState state(deck);
+    const auto fluxMode = modeFromString(opt.mode);
     const auto dims = gridDims(state);
+    const auto& unitSystem = state.getDeckUnitSystem();
     const auto regionValues = parseMappingFile(opt.mapping, dims);
     const auto regions = Opm::FluxRegions::extract(dims, regionValues);
     if (regions.size() != 1U) {
@@ -587,6 +763,9 @@ int run(const Options& opt)
     if (region.boundaryFaces.empty()) {
         throw std::invalid_argument("mapping produced no boundary faces");
     }
+
+    const auto phaseMaskValue = phaseMask(deck);
+    const auto nncPairToIndex = buildNncPairToIndex(state);
 
     Opm::EclIO::ERst restart(parentInput.restartPath.string());
     const auto reportSteps = restart.listOfReportStepNumbers();
@@ -604,8 +783,8 @@ int run(const Options& opt)
         boundaryTransmissibilities.push_back(transmissibilityForFace(face, tranx, trany, tranz));
     }
 
-    const bool waterActive = (phaseMask(deck) & static_cast<int>(Opm::EclIO::FluxFile::Phase::Water)) != 0;
-    const bool gasActive = (phaseMask(deck) & static_cast<int>(Opm::EclIO::FluxFile::Phase::Gas)) != 0;
+    const bool waterActive = (phaseMaskValue & static_cast<int>(Opm::EclIO::FluxFile::Phase::Water)) != 0;
+    const bool gasActive = (phaseMaskValue & static_cast<int>(Opm::EclIO::FluxFile::Phase::Gas)) != 0;
     const bool includeRs = true;
     const bool includeRv = true;
     const bool hasTemperature = restart.hasArray("TEMP", reportSteps.front());
@@ -614,9 +793,9 @@ int run(const Options& opt)
                            /*regionId=*/1,
                            dims,
                            region,
-                           modeFromString(opt.mode),
+                           fluxMode,
                            samplingFromString(opt.sampling),
-                           phaseMask(deck),
+                           phaseMaskValue,
                            boundaryTransmissibilities);
 
     std::optional<SummaryPayload> summaryPayload;
@@ -637,36 +816,54 @@ int run(const Options& opt)
 
     double previousTime = 0.0;
     for (std::size_t stepIdx = restartStepStartIndex; stepIdx < reportSteps.size(); ++stepIdx) {
-        const int reportStep = reportSteps[stepIdx];
+        const int sourceReportStep = reportSteps[stepIdx];
+        const auto summaryStepIdx = stepIdx - restartStepStartIndex;
+        const int reportStep = summaryPayload
+            ? static_cast<int>(summaryStepIdx + 1)
+            : sourceReportStep;
+        const int simStep = summaryPayload
+            ? static_cast<int>(summaryStepIdx + 1)
+            : sourceReportStep;
         auto step = dumper.makeZeroFluxStep(reportStep,
-                                            reportStep,
+                                            simStep,
                                             previousTime,
                                             0.0);
 
-        const auto pressure = requiredRestartArray(restart, "PRESSURE", reportStep);
-        const auto swat = waterActive ? requiredRestartArray(restart, "SWAT", reportStep) : std::vector<double>{};
-        const auto sgas = gasActive ? requiredRestartArray(restart, "SGAS", reportStep) : std::vector<double>{};
-        const auto rs = optionalRestartArray(restart, "RS", reportStep);
-        const auto rv = optionalRestartArray(restart, "RV", reportStep);
-        const auto temperature = hasTemperature ? requiredRestartArray(restart, "TEMP", reportStep) : std::vector<double>{};
-
-        fillPressureStepData(step,
+        if (hasFluxMode(fluxMode)) {
+            fillFluxStepData(step,
                              region,
-                             pressure,
-                             swat,
-                             sgas,
-                             rs,
-                             rv,
-                             temperature,
-                             waterActive,
-                             gasActive,
-                             includeRs,
-                             includeRv,
-                             hasTemperature);
+                             restart,
+                             sourceReportStep,
+                             phaseMaskValue,
+                             nncPairToIndex);
+        }
+
+        if (hasPressureMode(fluxMode)) {
+            const auto pressure = requiredRestartArray(restart, "PRESSURE", sourceReportStep);
+            const auto swat = waterActive ? requiredRestartArray(restart, "SWAT", sourceReportStep) : std::vector<double>{};
+            const auto sgas = gasActive ? requiredRestartArray(restart, "SGAS", sourceReportStep) : std::vector<double>{};
+            const auto rs = optionalRestartArray(restart, "RS", sourceReportStep);
+            const auto rv = optionalRestartArray(restart, "RV", sourceReportStep);
+            const auto temperature = hasTemperature ? requiredRestartArray(restart, "TEMP", sourceReportStep) : std::vector<double>{};
+
+            fillPressureStepData(step,
+                                 region,
+                                 unitSystem,
+                                 pressure,
+                                 swat,
+                                 sgas,
+                                 rs,
+                                 rv,
+                                 temperature,
+                                 waterActive,
+                                 gasActive,
+                                 includeRs,
+                                 includeRv,
+                                 hasTemperature);
+        }
 
         if (summaryPayload) {
-            const auto summaryStepIdx = stepIdx - restartStepStartIndex;
-            const double currentTime = summaryPayload->reportTimes[summaryStepIdx];
+            const double currentTime = summaryPayload->reportTimes[summaryStepIdx] * secondsPerDay;
             step.startTime = previousTime;
             step.stepLength = currentTime - previousTime;
             step.summaryValues = summaryPayload->valuesPerStep[summaryStepIdx];
@@ -678,7 +875,7 @@ int run(const Options& opt)
 
     dumper.write(opt.output, /*formatted=*/false);
 
-    std::cout << "Wrote pressure-mode FLUX file '" << opt.output << "' with "
+    std::cout << "Wrote " << opt.mode << "-mode FLUX file '" << opt.output << "' with "
               << region.boundaryFaces.size() << " boundary faces and "
               << (reportSteps.size() - restartStepStartIndex) << " report steps\n";
 

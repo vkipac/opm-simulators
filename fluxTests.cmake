@@ -19,6 +19,15 @@ if (BUILD_FLOW)
       opmcommon
   )
 
+  opm_add_executable(
+    TARGET
+      flux_smoke_compare
+    SOURCES
+      tests/flux/flux_smoke_compare.cpp
+    LIBRARIES
+      opmcommon
+  )
+
   set(_flux_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_dump_smoke)
 
   opm_add_test(flux_dump_smoke
@@ -101,6 +110,20 @@ if (BUILD_FLOW)
       -r ${_flux_mixed_case_result_path}
       -f FLUX_DUMP_MIXED_CASE_SMOKE
       -p "${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check FLUX_DUMP_MIXED_CASE_SMOKE.FLUX 10 1 10 10 1 5 BOTH"
+  )
+
+  set(_make_flux_pressure_equivalence_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+make_flux_pressure_equivalence_smoke)
+
+  opm_add_test(make_flux_pressure_equivalence_smoke
+    DEPENDS
+      flux_smoke_compare
+    EXE_TARGET
+      flow_blackoil
+    DRIVER_ARGS
+      -i ${PROJECT_SOURCE_DIR}/tests/flux
+      -r ${_make_flux_pressure_equivalence_result_path}
+      -f FLUX_DUMP_PRESSURE_SMOKE
+        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-equivalence-smoke.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_PRESSURE_SMOKE.DATA FLUX_DUMP_PRESSURE_SMOKE pressure 49"
   )
 
   set(_useflux_pressure_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+useflux_pressure_smoke)
