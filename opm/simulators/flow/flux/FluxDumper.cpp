@@ -210,6 +210,7 @@ void FluxDumper::appendReportStep(const ReportStepData& stepData)
     step.rs = stepData.rs;
     step.rv = stepData.rv;
     step.temperature = stepData.temperature;
+    step.summaryValues = stepData.summaryValues;
 
     if (!step.temperature.empty()) {
         this->data_.header.hasTemperature = true;
@@ -222,6 +223,11 @@ void FluxDumper::appendReportStep(const ReportStepData& stepData)
 void FluxDumper::write(const std::string& filename, const bool formatted) const
 {
     EclIO::FluxFile::write(filename, formatted, this->data_);
+}
+
+void FluxDumper::setSummaryKeys(std::vector<std::string> summaryKeys)
+{
+    this->data_.summaryKeys = std::move(summaryKeys);
 }
 
 const EclIO::FluxFile::Data& FluxDumper::data() const
@@ -282,16 +288,27 @@ void FluxDumper::validateStepData(const ReportStepData& stepData) const
         if (stepData.pressures.size() != numFaces) {
             throwSizeError("pressures", numFaces, stepData.pressures.size());
         }
-        if (stepData.swat.size() != numFaces) {
-            throwSizeError("swat", numFaces, stepData.swat.size());
+        if (this->data_.header.hasPhase(EclIO::FluxFile::Phase::Water)) {
+            if (stepData.swat.size() != numFaces) {
+                throwSizeError("swat", numFaces, stepData.swat.size());
+            }
         }
-        if (stepData.sgas.size() != numFaces) {
-            throwSizeError("sgas", numFaces, stepData.sgas.size());
+        else if (!stepData.swat.empty()) {
+            throwSizeError("swat", 0, stepData.swat.size());
         }
-        if (stepData.rs.size() != numFaces) {
+
+        if (this->data_.header.hasPhase(EclIO::FluxFile::Phase::Gas)) {
+            if (stepData.sgas.size() != numFaces) {
+                throwSizeError("sgas", numFaces, stepData.sgas.size());
+            }
+        }
+        else if (!stepData.sgas.empty()) {
+            throwSizeError("sgas", 0, stepData.sgas.size());
+        }
+        if (!stepData.rs.empty() && stepData.rs.size() != numFaces) {
             throwSizeError("rs", numFaces, stepData.rs.size());
         }
-        if (stepData.rv.size() != numFaces) {
+        if (!stepData.rv.empty() && stepData.rv.size() != numFaces) {
             throwSizeError("rv", numFaces, stepData.rv.size());
         }
         if (!stepData.temperature.empty() && stepData.temperature.size() != numFaces) {
@@ -317,6 +334,10 @@ void FluxDumper::validateStepData(const ReportStepData& stepData) const
         if (!stepData.temperature.empty()) {
             throwSizeError("temperature", 0, stepData.temperature.size());
         }
+    }
+
+    if (stepData.summaryValues.size() != this->data_.summaryKeys.size()) {
+        throwSizeError("summaryValues", this->data_.summaryKeys.size(), stepData.summaryValues.size());
     }
 }
 

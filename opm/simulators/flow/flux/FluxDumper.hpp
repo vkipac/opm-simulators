@@ -49,6 +49,7 @@ public:
         std::vector<double> rs;
         std::vector<double> rv;
         std::vector<double> temperature;
+        std::vector<double> summaryValues;
     };
 
     FluxDumper(std::string parentCaseName,
@@ -75,6 +76,7 @@ public:
 
     void appendReportStep(const ReportStepData& stepData);
     void write(const std::string& filename, bool formatted = false) const;
+    void setSummaryKeys(std::vector<std::string> summaryKeys);
 
     const EclIO::FluxFile::Data& data() const;
 

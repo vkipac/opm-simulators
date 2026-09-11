@@ -82,14 +82,16 @@ BOOST_AUTO_TEST_CASE(ValidatesReportStepVectorSizes)
     Opm::FluxDumper dumper("PARENT", 1, dims, regions.front(),
                            Opm::EclIO::FluxFile::Mode::Both,
                            Opm::EclIO::FluxFile::Sampling::Instant,
-                           static_cast<int>(Opm::EclIO::FluxFile::Phase::Oil));
+                           static_cast<int>(Opm::EclIO::FluxFile::Phase::Oil)
+                             | static_cast<int>(Opm::EclIO::FluxFile::Phase::Water)
+                             | static_cast<int>(Opm::EclIO::FluxFile::Phase::Gas));
 
     Opm::FluxDumper::ReportStepData good;
     good.reportStep = 1;
     good.simStep = 3;
     good.startTime = 10.0;
     good.stepLength = 2.0;
-    good.rates = {1.0};
+    good.rates = {1.0, 2.0, 3.0};
     good.pressures = {100.0};
     good.swat = {0.2};
     good.sgas = {0.1};
@@ -224,6 +226,47 @@ BOOST_AUTO_TEST_CASE(BuildsZeroFluxStepWithExpectedSizes)
   BOOST_CHECK_EQUAL(step.sgas.size(), 2U);
   BOOST_CHECK_EQUAL(step.rs.size(), 2U);
   BOOST_CHECK_EQUAL(step.rv.size(), 2U);
+}
+
+BOOST_AUTO_TEST_CASE(WritesAndReadsEmbeddedSummaryValues)
+{
+  const std::array<int, 3> dims{2, 1, 1};
+  std::vector<int> regionValues(dims[0] * dims[1] * dims[2], 0);
+  regionValues[globalIndex(dims, 1, 1, 1)] = 9;
+
+  const auto regions = Opm::FluxRegions::extract(dims, regionValues);
+  BOOST_REQUIRE_EQUAL(regions.size(), 1U);
+
+  Opm::FluxDumper dumper("PARENT", 9, dims, regions.front(),
+               Opm::EclIO::FluxFile::Mode::Pressure,
+               Opm::EclIO::FluxFile::Sampling::Instant,
+               static_cast<int>(Opm::EclIO::FluxFile::Phase::Oil));
+  dumper.setSummaryKeys({"TIME", "FOPT"});
+
+  Opm::FluxDumper::ReportStepData step;
+  step.reportStep = 1;
+  step.simStep = 1;
+  step.startTime = 0.0;
+  step.stepLength = 1.0;
+  step.pressures = {123.0};
+  step.rs = {0.0};
+  step.rv = {0.0};
+  step.summaryValues = {1.0, 2.0};
+  dumper.appendReportStep(step);
+
+  const auto outPath = std::filesystem::path{"test_fluxdumper_summary_roundtrip.FLUX"};
+  dumper.write(outPath.string(), false);
+
+  const auto loaded = Opm::EclIO::FluxFile::read(outPath.string());
+  BOOST_REQUIRE_EQUAL(loaded.summaryKeys.size(), 2U);
+  BOOST_CHECK_EQUAL(loaded.summaryKeys[0], "TIME");
+  BOOST_CHECK_EQUAL(loaded.summaryKeys[1], "FOPT");
+  BOOST_REQUIRE_EQUAL(loaded.reportSteps.size(), 1U);
+  BOOST_REQUIRE_EQUAL(loaded.reportSteps[0].summaryValues.size(), 2U);
+  BOOST_CHECK_CLOSE(loaded.reportSteps[0].summaryValues[0], 1.0, 1e-12);
+  BOOST_CHECK_CLOSE(loaded.reportSteps[0].summaryValues[1], 2.0, 1e-12);
+
+  std::filesystem::remove(outPath);
 }
 
 BOOST_AUTO_TEST_CASE(FlattensFaceMajorRatesInCanonicalPhaseOrder)
