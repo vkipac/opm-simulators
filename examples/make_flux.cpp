@@ -178,6 +178,41 @@ fs::path rootPathFromArgument(const std::string& text)
     return path;
 }
 
+std::optional<fs::path> latestSeparateRestart(const fs::path& rootPath,
+                                             const char restartPrefix)
+{
+    const auto directory = rootPath.parent_path().empty() ? fs::path{"."} : rootPath.parent_path();
+    const auto stem = rootPath.filename().string() + ".";
+
+    std::optional<fs::path> latest;
+    for (const auto& entry : fs::directory_iterator(directory)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+
+        const auto name = entry.path().filename().string();
+        if (!startsWith(name, stem)) {
+            continue;
+        }
+
+        const auto suffix = name.substr(stem.size());
+        if (suffix.size() != 5 || suffix[0] != restartPrefix) {
+            continue;
+        }
+
+        const auto digits = suffix.substr(1);
+        if (!std::all_of(digits.begin(), digits.end(), [](unsigned char c) { return std::isdigit(c); })) {
+            continue;
+        }
+
+        if (!latest || entry.path().filename().string() > latest->filename().string()) {
+            latest = entry.path();
+        }
+    }
+
+    return latest;
+}
+
 ParentInput resolveParentInput(const Options& opt)
 {
     ParentInput input;
@@ -195,17 +230,11 @@ ParentInput resolveParentInput(const Options& opt)
     input.restartPath = input.rootPath;
     input.restartPath += ".UNRST";
     if (!fs::exists(input.restartPath)) {
-        fs::path separateRestart = input.rootPath;
-        separateRestart += ".X0000";
-        if (fs::exists(separateRestart)) {
-            input.restartPath = separateRestart;
+        if (const auto latestX = latestSeparateRestart(input.rootPath, 'X')) {
+            input.restartPath = *latestX;
         }
-        else {
-            separateRestart = input.rootPath;
-            separateRestart += ".F0000";
-            if (fs::exists(separateRestart)) {
-                input.restartPath = separateRestart;
-            }
+        else if (const auto latestF = latestSeparateRestart(input.rootPath, 'F')) {
+            input.restartPath = *latestF;
         }
     }
 

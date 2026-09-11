@@ -126,6 +126,20 @@ if (BUILD_FLOW)
         -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-equivalence-smoke.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_PRESSURE_SMOKE.DATA FLUX_DUMP_PRESSURE_SMOKE pressure 49"
   )
 
+    set(_make_flux_flux_equivalence_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+make_flux_flux_equivalence_smoke)
+
+    opm_add_test(make_flux_flux_equivalence_smoke
+      DEPENDS
+        flux_smoke_compare
+      EXE_TARGET
+        flow_blackoil
+      DRIVER_ARGS
+        -i ${PROJECT_SOURCE_DIR}/tests/flux
+        -r ${_make_flux_flux_equivalence_result_path}
+        -f FLUX_DUMP_FLORES_SMOKE
+        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-equivalence-smoke.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_FLORES_SMOKE.DATA FLUX_DUMP_FLORES_SMOKE flux 0"
+    )
+
   set(_useflux_pressure_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+useflux_pressure_smoke)
 
   opm_add_test(useflux_pressure_smoke

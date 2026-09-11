@@ -170,6 +170,19 @@ public:
                      const int comp_idx) const
     { return flores_[comp_idx][FaceDir::ToIntersectionIndex(dir)][globalDofIdx]; }
 
+    Scalar getFloresIfAvailable(const unsigned globalDofIdx,
+                                const FaceDir::DirEnum dir,
+                                const int comp_idx) const
+    {
+        const auto dirIdx = FaceDir::ToIntersectionIndex(dir);
+        const auto& data = flores_[comp_idx][dirIdx];
+        if (data.empty() || globalDofIdx >= data.size()) {
+            return 0.0;
+        }
+
+        return data[globalDofIdx];
+    }
+
 private:
     bool anyFlows_{false};
     bool anyFlores_{false};

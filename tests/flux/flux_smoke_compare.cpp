@@ -25,7 +25,7 @@ int fail(const std::string& msg)
     return EXIT_FAILURE;
 }
 
-bool closeEnough(const double lhs, const double rhs, const double tol = 1e-2)
+bool closeEnough(const double lhs, const double rhs, const double tol)
 {
     const auto scale = std::max({1.0, std::abs(lhs), std::abs(rhs)});
     return std::abs(lhs - rhs) <= tol * scale;
@@ -33,7 +33,8 @@ bool closeEnough(const double lhs, const double rhs, const double tol = 1e-2)
 
 bool compareVector(const std::vector<double>& lhs,
                    const std::vector<double>& rhs,
-                   const std::string& name)
+                   const std::string& name,
+                   const double tol)
 {
     if (lhs.size() != rhs.size()) {
         std::cerr << name << " size mismatch: " << lhs.size() << " vs " << rhs.size() << '\n';
@@ -41,7 +42,7 @@ bool compareVector(const std::vector<double>& lhs,
     }
 
     for (std::size_t i = 0; i < lhs.size(); ++i) {
-        if (!closeEnough(lhs[i], rhs[i])) {
+        if (!closeEnough(lhs[i], rhs[i], tol)) {
             std::cerr << name << " mismatch at index " << i << ": " << lhs[i] << " vs " << rhs[i] << '\n';
             return false;
         }
@@ -61,26 +62,26 @@ bool compareStep(const Opm::EclIO::FluxFile::ReportStep& lhs,
                   << ", simStep " << lhs.simStep << " vs " << rhs.simStep << '\n';
         return false;
     }
-    if (!closeEnough(lhs.startTime, rhs.startTime) || !closeEnough(lhs.stepLength, rhs.stepLength)) {
+    if (!closeEnough(lhs.startTime, rhs.startTime, 1e-10) || !closeEnough(lhs.stepLength, rhs.stepLength, 1e-10)) {
         std::cerr << "step time mismatch at step " << stepIdx
                   << ": startTime " << lhs.startTime << " vs " << rhs.startTime
                   << ", stepLength " << lhs.stepLength << " vs " << rhs.stepLength << '\n';
         return false;
     }
 
-    const bool basicMatch = compareVector(lhs.rates, rhs.rates, "rates")
-        && compareVector(lhs.pressures, rhs.pressures, "pressures")
-        && compareVector(lhs.swat, rhs.swat, "swat")
-        && compareVector(lhs.sgas, rhs.sgas, "sgas")
-        && compareVector(lhs.rs, rhs.rs, "rs")
-        && compareVector(lhs.rv, rhs.rv, "rv")
-        && compareVector(lhs.temperature, rhs.temperature, "temperature");
+    const bool basicMatch = compareVector(lhs.rates, rhs.rates, "rates", 1e-10)
+        && compareVector(lhs.pressures, rhs.pressures, "pressures", 1e-2)
+        && compareVector(lhs.swat, rhs.swat, "swat", 1e-10)
+        && compareVector(lhs.sgas, rhs.sgas, "sgas", 1e-10)
+        && compareVector(lhs.rs, rhs.rs, "rs", 1e-4)
+        && compareVector(lhs.rv, rhs.rv, "rv", 1e-4)
+        && compareVector(lhs.temperature, rhs.temperature, "temperature", 1e-6);
 
     if (!basicMatch) {
         return false;
     }
 
-    return !compareSummary || compareVector(lhs.summaryValues, rhs.summaryValues, "summaryValues");
+    return !compareSummary || compareVector(lhs.summaryValues, rhs.summaryValues, "summaryValues", 1e-10);
 }
 
 } // namespace
@@ -162,11 +163,11 @@ int main(int argc, char** argv)
     for (std::size_t i = 0; i < expected.boundaryFaces.size(); ++i) {
         const auto& lhs = expected.boundaryFaces[i];
         const auto& rhs = actual.boundaryFaces[i];
-        const bool ignoreTransmissibility = closeEnough(lhs.transmissibility, 0.0);
+        const bool ignoreTransmissibility = closeEnough(lhs.transmissibility, 0.0, 1e-12);
         if (lhs.interiorLocalCell != rhs.interiorLocalCell
             || lhs.direction != rhs.direction
             || lhs.exteriorGlobalCell != rhs.exteriorGlobalCell
-            || (!ignoreTransmissibility && !closeEnough(lhs.transmissibility, rhs.transmissibility))) {
+            || (!ignoreTransmissibility && !closeEnough(lhs.transmissibility, rhs.transmissibility, 1e-10))) {
             std::cerr << "boundary face mismatch at index " << i << ":\n"
                       << "  interiorLocalCell: " << lhs.interiorLocalCell << " vs " << rhs.interiorLocalCell << '\n'
                       << "  direction: " << lhs.direction << " vs " << rhs.direction << '\n'

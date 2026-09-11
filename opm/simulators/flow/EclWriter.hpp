@@ -1180,7 +1180,7 @@ private:
                             return 0.0;
                         }
 
-                        return -flows.getFlores(face.interiorGlobalCell, face.direction, comp);
+                        return -flows.getFloresIfAvailable(face.interiorGlobalCell, face.direction, comp);
                     });
             }
 
