@@ -191,4 +191,34 @@ if (BUILD_FLOW)
       -f FLUX_DUMP_USEFLUX_SUFFIX_SMOKE
       -p "bash ${PROJECT_SOURCE_DIR}/tests/check-useflux-invalid-suffix-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_INVALID_SUFFIX_SMOKE.DATA"
   )
+
+  set(_useflux_missing_mpi_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+useflux_missing_mpi_smoke)
+
+  opm_add_test(useflux_missing_mpi_smoke
+    DEPENDS
+      flux_smoke_shape_check
+    EXE_TARGET
+      flow_blackoil
+    DRIVER_ARGS
+      -i ${PROJECT_SOURCE_DIR}/tests/flux
+      -r ${_useflux_missing_mpi_result_path}
+      -f FLUX_DUMP_USEFLUX_SUFFIX_SMOKE
+      -n 2
+      -p "bash ${PROJECT_SOURCE_DIR}/tests/check-useflux-missing-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_MISSING_SMOKE.DATA 2"
+  )
+
+  set(_useflux_invalid_suffix_mpi_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+useflux_invalid_suffix_mpi_smoke)
+
+  opm_add_test(useflux_invalid_suffix_mpi_smoke
+    DEPENDS
+      flux_smoke_shape_check
+    EXE_TARGET
+      flow_blackoil
+    DRIVER_ARGS
+      -i ${PROJECT_SOURCE_DIR}/tests/flux
+      -r ${_useflux_invalid_suffix_mpi_result_path}
+      -f FLUX_DUMP_USEFLUX_SUFFIX_SMOKE
+      -n 2
+      -p "bash ${PROJECT_SOURCE_DIR}/tests/check-useflux-invalid-suffix-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_INVALID_SUFFIX_SMOKE.DATA 2"
+  )
 endif()
