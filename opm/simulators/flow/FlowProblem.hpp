@@ -78,6 +78,7 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <sstream>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -1834,6 +1835,12 @@ protected:
         const auto inputDir = std::filesystem::path{ioConfig.getInputDir()};
         const auto baseName = ioConfig.getBaseName();
         const auto selectedFluxPath = FluxBoundary::selectInputPath(inputDir, baseName);
+        if (!std::filesystem::exists(selectedFluxPath)) {
+            std::ostringstream msg;
+            msg << "USEFLUX requested but no FLUX file found: expected '" << baseName
+                << ".FLUX' or '" << baseName << ".FLUXdddd' in '" << inputDir.string() << "'";
+            throw std::runtime_error(msg.str());
+        }
 
         const auto fluxData = EclIO::FluxFile::read(selectedFluxPath.string());
         auto fluxBoundary = FluxBoundary::fromData(fluxData,
