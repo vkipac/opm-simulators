@@ -64,11 +64,14 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <filesystem>
 #include <functional>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -1072,7 +1075,14 @@ private:
         const auto& io = state.getIOConfig();
         const auto phaseMask = this->fluxPhaseMask_();
 
+        this->fluxOutputPaths_.clear();
         this->fluxDumpers_.reserve(regions.size());
+        this->fluxOutputPaths_.reserve(regions.size());
+
+        const auto basePath = (std::filesystem::path{io.getOutputDir()} / io.getBaseName()).string();
+        const auto multipleRegions = regions.size() > 1;
+
+        int sequence = 1;
         for (const auto& region : regions) {
             this->fluxDumpers_.emplace_back(io.getBaseName(),
                                             region.regionId,
@@ -1081,6 +1091,16 @@ private:
                                             EclIO::FluxFile::Mode::Flux,
                                             EclIO::FluxFile::Sampling::Averaged,
                                             phaseMask);
+
+            if (multipleRegions) {
+                std::ostringstream os;
+                os << basePath << ".FLUX" << std::setw(4) << std::setfill('0') << sequence;
+                this->fluxOutputPaths_.push_back(os.str());
+            }
+            else {
+                this->fluxOutputPaths_.push_back(basePath + ".FLUX");
+            }
+            ++sequence;
         }
 
         OpmLog::note("DUMPFLUX bootstrap: initialized "
@@ -1148,6 +1168,16 @@ private:
 
             dumper.appendReportStep(step);
         }
+
+        this->writeFluxDumpers_();
+    }
+
+    void writeFluxDumpers_() const
+    {
+        for (std::size_t i = 0; i < this->fluxDumpers_.size(); ++i) {
+            const auto& path = this->fluxOutputPaths_[i];
+            this->fluxDumpers_[i].write(path, /*formatted=*/false);
+        }
     }
 
     Simulator& simulator_;
@@ -1156,6 +1186,7 @@ private:
     int rank_ ;
     Inplace inplace_;
     std::vector<FluxDumper> fluxDumpers_;
+    std::vector<std::string> fluxOutputPaths_;
     std::map<std::pair<int, int>, int> fluxNncPairToIndex_;
 };
 
