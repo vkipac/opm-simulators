@@ -17,6 +17,7 @@
 */
 
 #include <opm/io/eclipse/FluxFile.hpp>
+#include <opm/io/eclipse/EclFile.hpp>
 
 #include <cstddef>
 #include <cctype>
@@ -114,6 +115,7 @@ int main(int argc, char** argv)
         }
 
         const auto data = Opm::EclIO::FluxFile::read(path);
+        const auto rawFile = Opm::EclIO::EclFile(path, Opm::EclIO::EclFile::Formatted{false}, true);
         const auto& h = data.header;
 
         if (h.parentNx != expectedNx || h.parentNy != expectedNy || h.parentNz != expectedNz) {
@@ -157,6 +159,28 @@ int main(int argc, char** argv)
 
         const auto expectFlux = hasFluxMode(h.mode);
         const auto expectPressure = hasPressureMode(h.mode);
+
+        if (rawFile.hasKey("FLXRATE") != expectFlux) {
+            return fail("unexpected FLXRATE array presence in " + path);
+        }
+        if (rawFile.hasKey("FLXPRES") != expectPressure) {
+            return fail("unexpected FLXPRES array presence in " + path);
+        }
+        if (rawFile.hasKey("FLXSATW") != (expectPressure && h.hasPhase(Opm::EclIO::FluxFile::Phase::Water))) {
+            return fail("unexpected FLXSATW array presence in " + path);
+        }
+        if (rawFile.hasKey("FLXSATG") != (expectPressure && h.hasPhase(Opm::EclIO::FluxFile::Phase::Gas))) {
+            return fail("unexpected FLXSATG array presence in " + path);
+        }
+        if (rawFile.hasKey("FLXRS") != expectPressure) {
+            return fail("unexpected FLXRS array presence in " + path);
+        }
+        if (rawFile.hasKey("FLXRV") != expectPressure) {
+            return fail("unexpected FLXRV array presence in " + path);
+        }
+        if (rawFile.hasKey("FLXTEMP") != h.hasTemperature) {
+            return fail("unexpected FLXTEMP array presence in " + path);
+        }
 
         for (const auto& step : data.reportSteps) {
             const auto expectedRateSize = expectFlux ? expectedRates : 0U;

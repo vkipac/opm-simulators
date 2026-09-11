@@ -65,4 +65,32 @@ if (BUILD_FLOW)
       -f FLUX_DUMP_BOTH_SMOKE
       -p "${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check FLUX_DUMP_BOTH_SMOKE.FLUX 10 1 10 10 1 5 BOTH"
   )
+
+  set(_flux_invalid_type_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_dump_invalid_type_smoke)
+
+  opm_add_test(flux_dump_invalid_type_smoke
+    DEPENDS
+      flux_smoke_shape_check
+    EXE_TARGET
+      flow_blackoil
+    DRIVER_ARGS
+      -i ${PROJECT_SOURCE_DIR}/tests/flux
+      -r ${_flux_invalid_type_result_path}
+      -f FLUX_DUMP_INVALID_TYPE_SMOKE
+        -p "bash -lc \"${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check FLUX_DUMP_INVALID_TYPE_SMOKE.FLUX 10 1 10 10 1 5 FLUX && grep -q \'Unrecognized FLUXTYPE BC_TYPE value '\''BANANA'\'', defaulting to FLUX output mode\' FLUX_DUMP_INVALID_TYPE_SMOKE.PRT\""
+  )
+
+  set(_flux_mixed_case_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_dump_mixed_case_smoke)
+
+  opm_add_test(flux_dump_mixed_case_smoke
+    DEPENDS
+      flux_smoke_shape_check
+    EXE_TARGET
+      flow_blackoil
+    DRIVER_ARGS
+      -i ${PROJECT_SOURCE_DIR}/tests/flux
+      -r ${_flux_mixed_case_result_path}
+      -f FLUX_DUMP_MIXED_CASE_SMOKE
+      -p "${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check FLUX_DUMP_MIXED_CASE_SMOKE.FLUX 10 1 10 10 1 5 BOTH"
+  )
 endif()
