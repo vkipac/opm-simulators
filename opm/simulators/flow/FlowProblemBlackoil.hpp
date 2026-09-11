@@ -65,10 +65,12 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1166,6 +1168,19 @@ public:
             unsigned interiorDofIdx = context.interiorScvIndex(spaceIdx, timeIdx);
             unsigned globalDofIdx = context.globalSpaceIndex(interiorDofIdx, timeIdx);
             unsigned pvtRegionIdx = pvtRegionIndex(context, spaceIdx, timeIdx);
+
+            RateVector phaseVolRate = 0.0;
+            const auto dir = FaceDir::FromIntersectionIndex(indexInInside);
+            if (this->fluxBoundaryPhaseVolumetricRate_(globalDofIdx, dir, phaseVolRate)) {
+                const auto& insideFs = context.intensiveQuantities(interiorDofIdx, timeIdx).fluidState();
+                values.setMassRate(this->fluxPhaseVolToMassRate_(phaseVolRate,
+                                                                 insideFs,
+                                                                 globalDofIdx,
+                                                                 indexInInside),
+                                   pvtRegionIdx);
+                return;
+            }
+
             const auto [type, massrate] = this->boundaryCondition(globalDofIdx, indexInInside);
             if (type == BCType::THERMAL)
                 values.setThermalFlow(context, spaceIdx, timeIdx, this->boundaryFluidState(globalDofIdx, indexInInside));
@@ -1175,6 +1190,74 @@ public:
                 values.setMassRate(massrate, pvtRegionIdx);
         }
     }
+
+private:
+    template <class ScalarFluidState>
+    RateVector fluxPhaseVolToMassRate_(const RateVector& phaseVolRate,
+                                       const ScalarFluidState& insideFs,
+                                       const unsigned globalDofIdx,
+                                       const unsigned boundaryFaceIdx) const
+    {
+        auto checkedDensity = [&](const unsigned phaseIdx,
+                                  const char* phaseName)
+        {
+            const Scalar rho = getValue(insideFs.density(phaseIdx));
+            if (std::isfinite(rho) && rho > 0.0) {
+                return rho;
+            }
+
+            std::ostringstream os;
+            os << "Invalid live phase density for USEFLUX FLUX-mode conversion at dof "
+               << globalDofIdx << ", boundary face " << boundaryFaceIdx
+               << ", phase '" << phaseName << "': " << rho;
+            throw std::runtime_error(os.str());
+        };
+
+        RateVector massRate = 0.0;
+        if (FluidSystem::phaseIsActive(oilPhaseIdx)) {
+            const auto comp = FluidSystem::canonicalToActiveCompIdx(oilCompIdx);
+            const auto volRate = phaseVolRate[comp];
+            const Scalar volRateValue = getValue(volRate);
+            if (!std::isfinite(volRateValue)) {
+                std::ostringstream os;
+                os << "Invalid USEFLUX FLUX-mode volumetric rate at dof "
+                   << globalDofIdx << ", boundary face " << boundaryFaceIdx
+                   << ", phase 'OIL': " << volRateValue;
+                throw std::runtime_error(os.str());
+            }
+            massRate[comp] = volRate * checkedDensity(oilPhaseIdx, "OIL");
+        }
+        if (FluidSystem::phaseIsActive(waterPhaseIdx)) {
+            const auto comp = FluidSystem::canonicalToActiveCompIdx(waterCompIdx);
+            const auto volRate = phaseVolRate[comp];
+            const Scalar volRateValue = getValue(volRate);
+            if (!std::isfinite(volRateValue)) {
+                std::ostringstream os;
+                os << "Invalid USEFLUX FLUX-mode volumetric rate at dof "
+                   << globalDofIdx << ", boundary face " << boundaryFaceIdx
+                   << ", phase 'WATER': " << volRateValue;
+                throw std::runtime_error(os.str());
+            }
+            massRate[comp] = volRate * checkedDensity(waterPhaseIdx, "WATER");
+        }
+        if (FluidSystem::phaseIsActive(gasPhaseIdx)) {
+            const auto comp = FluidSystem::canonicalToActiveCompIdx(gasCompIdx);
+            const auto volRate = phaseVolRate[comp];
+            const Scalar volRateValue = getValue(volRate);
+            if (!std::isfinite(volRateValue)) {
+                std::ostringstream os;
+                os << "Invalid USEFLUX FLUX-mode volumetric rate at dof "
+                   << globalDofIdx << ", boundary face " << boundaryFaceIdx
+                   << ", phase 'GAS': " << volRateValue;
+                throw std::runtime_error(os.str());
+            }
+            massRate[comp] = volRate * checkedDensity(gasPhaseIdx, "GAS");
+        }
+
+        return massRate;
+    }
+
+public:
 
     //!\brief Read simulator solution state from the outputmodule (used with restart)
     //! \param restart_step Step to read at

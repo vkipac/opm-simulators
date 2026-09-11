@@ -1237,56 +1237,34 @@ public:
         const auto& bcDirIndex = bcindex_(dir);
         const bool hasDeckBc = globalSpaceIdx < bcDirIndex.size() && bcDirIndex[globalSpaceIdx] != 0;
         if (!hasDeckBc) {
-            const auto* fluxData = this->fluxBoundaryData_();
-            const auto* fluxStep = this->fluxBoundaryReportStep_();
-            const auto fluxSlot = this->fluxBoundaryFaceSlot_(globalSpaceIdx, dir);
-            if (!fluxData || !fluxStep || fluxSlot <= 0) {
-                return { BCType::NONE, RateVector(0.0) };
-            }
-
-            const auto faceIndex = static_cast<std::size_t>(fluxSlot - 1);
-            const auto mode = fluxData->header.mode;
-            const auto fluxEnabled = (static_cast<int>(mode) & static_cast<int>(EclIO::FluxFile::Mode::Flux)) != 0;
-            const auto pressureEnabled = (static_cast<int>(mode) & static_cast<int>(EclIO::FluxFile::Mode::Pressure)) != 0;
-
-            if (fluxEnabled) {
-                const auto faceCount = static_cast<std::size_t>(fluxData->header.numBoundaryFaces);
-                const auto phaseCount = static_cast<std::size_t>(fluxData->header.numPhases);
-                const auto expectedSize = faceCount * phaseCount;
-                if (phaseCount > 0 && faceIndex < faceCount && fluxStep->rates.size() == expectedSize) {
-                    RateVector rate = 0.0;
-                    const auto base = faceIndex * phaseCount;
-                    const auto pvtRegionIdx = this->pvtRegionIndex(globalSpaceIdx);
-                    std::size_t phaseSlot = 0;
-
-                    if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Oil)) {
-                        if (FluidSystem::phaseIsActive(oilPhaseIdx)) {
-                            rate[FluidSystem::canonicalToActiveCompIdx(oilCompIdx)] =
-                                fluxStep->rates[base + phaseSlot]
-                                * FluidSystem::referenceDensity(oilPhaseIdx, pvtRegionIdx);
-                        }
-                        ++phaseSlot;
-                    }
-                    if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Water)) {
-                        if (FluidSystem::phaseIsActive(waterPhaseIdx)) {
-                            rate[FluidSystem::canonicalToActiveCompIdx(waterCompIdx)] =
-                                fluxStep->rates[base + phaseSlot]
-                                * FluidSystem::referenceDensity(waterPhaseIdx, pvtRegionIdx);
-                        }
-                        ++phaseSlot;
-                    }
-                    if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Gas)) {
-                        if (FluidSystem::phaseIsActive(gasPhaseIdx)) {
-                            rate[FluidSystem::canonicalToActiveCompIdx(gasCompIdx)] =
-                                fluxStep->rates[base + phaseSlot]
-                                * FluidSystem::referenceDensity(gasPhaseIdx, pvtRegionIdx);
-                        }
-                    }
-
-                    return { BCType::RATE, rate };
+            RateVector phaseVolRate = 0.0;
+            if (this->fluxBoundaryPhaseVolumetricRate_(globalSpaceIdx, dir, phaseVolRate)) {
+                // Retain legacy mass-like fallback for generic callers; BlackOil now
+                // provides a dedicated live-density conversion path in boundary().
+                const auto pvtRegionIdx = this->pvtRegionIndex(globalSpaceIdx);
+                RateVector rate = 0.0;
+                if (FluidSystem::phaseIsActive(oilPhaseIdx)) {
+                    rate[FluidSystem::canonicalToActiveCompIdx(oilCompIdx)] =
+                        phaseVolRate[FluidSystem::canonicalToActiveCompIdx(oilCompIdx)]
+                        * FluidSystem::referenceDensity(oilPhaseIdx, pvtRegionIdx);
                 }
+                if (FluidSystem::phaseIsActive(waterPhaseIdx)) {
+                    rate[FluidSystem::canonicalToActiveCompIdx(waterCompIdx)] =
+                        phaseVolRate[FluidSystem::canonicalToActiveCompIdx(waterCompIdx)]
+                        * FluidSystem::referenceDensity(waterPhaseIdx, pvtRegionIdx);
+                }
+                if (FluidSystem::phaseIsActive(gasPhaseIdx)) {
+                    rate[FluidSystem::canonicalToActiveCompIdx(gasCompIdx)] =
+                        phaseVolRate[FluidSystem::canonicalToActiveCompIdx(gasCompIdx)]
+                        * FluidSystem::referenceDensity(gasPhaseIdx, pvtRegionIdx);
+                }
+
+                return { BCType::RATE, rate };
             }
 
+            const auto* fluxData = this->fluxBoundaryData_();
+            const auto mode = fluxData ? fluxData->header.mode : EclIO::FluxFile::Mode::Flux;
+            const auto pressureEnabled = (static_cast<int>(mode) & static_cast<int>(EclIO::FluxFile::Mode::Pressure)) != 0;
             if (pressureEnabled) {
                 return { BCType::FREE, RateVector(0.0) };
             }
@@ -1338,6 +1316,65 @@ public:
     }
 
 protected:
+    bool fluxBoundaryPhaseVolumetricRate_(const unsigned int globalSpaceIdx,
+                                          const FaceDir::DirEnum dir,
+                                          RateVector& phaseVolRate) const
+    {
+        const auto& bcDirIndex = bcindex_(dir);
+        const bool hasDeckBc = globalSpaceIdx < bcDirIndex.size() && bcDirIndex[globalSpaceIdx] != 0;
+        if (hasDeckBc) {
+            return false;
+        }
+
+        const auto* fluxData = this->fluxBoundaryData_();
+        const auto* fluxStep = this->fluxBoundaryReportStep_();
+        const auto fluxSlot = this->fluxBoundaryFaceSlot_(globalSpaceIdx, dir);
+        if (!fluxData || !fluxStep || fluxSlot <= 0) {
+            return false;
+        }
+
+        const auto mode = fluxData->header.mode;
+        const auto fluxEnabled = (static_cast<int>(mode) & static_cast<int>(EclIO::FluxFile::Mode::Flux)) != 0;
+        if (!fluxEnabled) {
+            return false;
+        }
+
+        const auto faceIndex = static_cast<std::size_t>(fluxSlot - 1);
+        const auto faceCount = static_cast<std::size_t>(fluxData->header.numBoundaryFaces);
+        const auto phaseCount = static_cast<std::size_t>(fluxData->header.numPhases);
+        const auto expectedSize = faceCount * phaseCount;
+        if (phaseCount == 0 || faceIndex >= faceCount || fluxStep->rates.size() != expectedSize) {
+            return false;
+        }
+
+        phaseVolRate = 0.0;
+        const auto base = faceIndex * phaseCount;
+        std::size_t phaseSlot = 0;
+
+        if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Oil)) {
+            if (FluidSystem::phaseIsActive(oilPhaseIdx)) {
+                phaseVolRate[FluidSystem::canonicalToActiveCompIdx(oilCompIdx)] =
+                    fluxStep->rates[base + phaseSlot];
+            }
+            ++phaseSlot;
+        }
+        if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Water)) {
+            if (FluidSystem::phaseIsActive(waterPhaseIdx)) {
+                phaseVolRate[FluidSystem::canonicalToActiveCompIdx(waterCompIdx)] =
+                    fluxStep->rates[base + phaseSlot];
+            }
+            ++phaseSlot;
+        }
+        if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Gas)) {
+            if (FluidSystem::phaseIsActive(gasPhaseIdx)) {
+                phaseVolRate[FluidSystem::canonicalToActiveCompIdx(gasCompIdx)] =
+                    fluxStep->rates[base + phaseSlot];
+            }
+        }
+
+        return true;
+    }
+
     int fluxBoundaryFaceSlot_(const unsigned int globalSpaceIdx, const FaceDir::DirEnum dir) const
     {
         const auto& dirData = fluxBoundaryFaceIndex_(dir);
