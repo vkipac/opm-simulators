@@ -1880,6 +1880,25 @@ protected:
         }
 
         const auto fluxData = EclIO::FluxFile::read(selectedFluxPath.string());
+        const auto fluxModeEnabled = (static_cast<int>(fluxData.header.mode)
+                                      & static_cast<int>(EclIO::FluxFile::Mode::Flux)) != 0;
+        if (fluxModeEnabled) {
+            for (std::size_t stepIdx = 0; stepIdx < fluxData.reportSteps.size(); ++stepIdx) {
+                const auto& rates = fluxData.reportSteps[stepIdx].rates;
+                for (std::size_t rateIdx = 0; rateIdx < rates.size(); ++rateIdx) {
+                    const auto value = rates[rateIdx];
+                    if (!std::isfinite(value)) {
+                        std::ostringstream msg;
+                        msg << "Invalid USEFLUX FLUX-mode volumetric rate in '"
+                            << selectedFluxPath.string() << "' at report-step index "
+                            << stepIdx << ", rate index " << rateIdx
+                            << ": " << value;
+                        throw std::runtime_error(msg.str());
+                    }
+                }
+            }
+        }
+
         auto fluxBoundary = FluxBoundary::fromData(fluxData,
                                                    FluxBoundary::buildLocalToActive(fluxData.localToGlobal));
 

@@ -1446,6 +1446,7 @@ list (APPEND EXAMPLE_SOURCE_FILES
   examples/lens_immiscible_vcfv_fd.cpp
   examples/lens_richards_ecfv.cpp
   examples/lens_richards_vcfv.cpp
+  examples/make_flux.cpp
   examples/obstacle_immiscible.cpp
   examples/obstacle_ncp.cpp
   examples/obstacle_pvs.cpp

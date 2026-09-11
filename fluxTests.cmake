@@ -10,6 +10,15 @@ if (BUILD_FLOW)
       opmcommon
   )
 
+  opm_add_executable(
+    TARGET
+      flux_smoke_mutate
+    SOURCES
+      tests/flux/flux_smoke_mutate.cpp
+    LIBRARIES
+      opmcommon
+  )
+
   set(_flux_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_dump_smoke)
 
   opm_add_test(flux_dump_smoke
@@ -249,5 +258,67 @@ if (BUILD_FLOW)
       -f FLUX_DUMP_USEFLUX_SUFFIX_SMOKE
       -n 2
       -p "bash ${PROJECT_SOURCE_DIR}/tests/check-useflux-mixed-suffix-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_MIXED_SUFFIX_SMOKE.DATA 2"
+  )
+
+  set(_useflux_invalid_rate_nan_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+useflux_invalid_rate_nan_smoke)
+
+  opm_add_test(useflux_invalid_rate_nan_smoke
+    DEPENDS
+      flux_smoke_shape_check
+      flux_smoke_mutate
+    EXE_TARGET
+      flow_blackoil
+    DRIVER_ARGS
+      -i ${PROJECT_SOURCE_DIR}/tests/flux
+      -r ${_useflux_invalid_rate_nan_result_path}
+      -f FLUX_DUMP_USEFLUX_FLUX_SMOKE
+      -p "bash ${PROJECT_SOURCE_DIR}/tests/check-useflux-invalid-rate-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_BINARY_DIR}/bin/flux_smoke_mutate ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_FLUX_SMOKE.DATA nan"
+  )
+
+  set(_useflux_invalid_rate_inf_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+useflux_invalid_rate_inf_smoke)
+
+  opm_add_test(useflux_invalid_rate_inf_smoke
+    DEPENDS
+      flux_smoke_shape_check
+      flux_smoke_mutate
+    EXE_TARGET
+      flow_blackoil
+    DRIVER_ARGS
+      -i ${PROJECT_SOURCE_DIR}/tests/flux
+      -r ${_useflux_invalid_rate_inf_result_path}
+      -f FLUX_DUMP_USEFLUX_FLUX_SMOKE
+      -p "bash ${PROJECT_SOURCE_DIR}/tests/check-useflux-invalid-rate-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_BINARY_DIR}/bin/flux_smoke_mutate ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_FLUX_SMOKE.DATA inf"
+  )
+
+  set(_useflux_invalid_rate_nan_mpi_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+useflux_invalid_rate_nan_mpi_smoke)
+
+  opm_add_test(useflux_invalid_rate_nan_mpi_smoke
+    DEPENDS
+      flux_smoke_shape_check
+      flux_smoke_mutate
+    EXE_TARGET
+      flow_blackoil
+    DRIVER_ARGS
+      -i ${PROJECT_SOURCE_DIR}/tests/flux
+      -r ${_useflux_invalid_rate_nan_mpi_result_path}
+      -f FLUX_DUMP_USEFLUX_FLUX_SMOKE
+      -n 2
+      -p "bash ${PROJECT_SOURCE_DIR}/tests/check-useflux-invalid-rate-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_BINARY_DIR}/bin/flux_smoke_mutate ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_FLUX_SMOKE.DATA nan 2"
+  )
+
+  set(_useflux_invalid_rate_inf_mpi_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+useflux_invalid_rate_inf_mpi_smoke)
+
+  opm_add_test(useflux_invalid_rate_inf_mpi_smoke
+    DEPENDS
+      flux_smoke_shape_check
+      flux_smoke_mutate
+    EXE_TARGET
+      flow_blackoil
+    DRIVER_ARGS
+      -i ${PROJECT_SOURCE_DIR}/tests/flux
+      -r ${_useflux_invalid_rate_inf_mpi_result_path}
+      -f FLUX_DUMP_USEFLUX_FLUX_SMOKE
+      -n 2
+      -p "bash ${PROJECT_SOURCE_DIR}/tests/check-useflux-invalid-rate-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_BINARY_DIR}/bin/flux_smoke_mutate ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_FLUX_SMOKE.DATA inf 2"
   )
 endif()
