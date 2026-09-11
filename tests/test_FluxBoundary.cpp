@@ -149,3 +149,49 @@ BOOST_AUTO_TEST_CASE(RejectsInactiveBoundaryInteriorCell)
 
     BOOST_CHECK_THROW(Opm::FluxBoundary::fromData(data, {-1}), std::invalid_argument);
 }
+
+BOOST_AUTO_TEST_CASE(BuildsDirectionalFaceIndexRegistration)
+{
+    const std::array<int, 3> dims{4, 1, 1};
+    std::vector<int> regionValues(dims[0] * dims[1] * dims[2], 0);
+    regionValues[globalIndex(dims, 2, 1, 1)] = 3;
+    regionValues[globalIndex(dims, 3, 1, 1)] = 3;
+
+    const auto regions = Opm::FluxRegions::extract(dims, regionValues);
+    BOOST_REQUIRE_EQUAL(regions.size(), 1U);
+
+    Opm::FluxDumper dumper("PARENT", 3, dims, regions.front(),
+                           Opm::EclIO::FluxFile::Mode::Flux,
+                           Opm::EclIO::FluxFile::Sampling::Instant,
+                           static_cast<int>(Opm::EclIO::FluxFile::Phase::Oil));
+
+    Opm::FluxDumper::ReportStepData step;
+    step.reportStep = 0;
+    step.simStep = 0;
+    step.startTime = 0.0;
+    step.stepLength = 1.0;
+    step.rates = {1.0, 2.0};
+    dumper.appendReportStep(step);
+
+    const auto localToActive = Opm::FluxBoundary::buildLocalToActive(regions.front().localToGlobal);
+    const auto boundary = Opm::FluxBoundary::fromData(dumper.data(), localToActive);
+    const auto directional = boundary.buildDirectionalFaceIndices(2);
+
+    BOOST_CHECK_EQUAL(directional[1][0], 1);
+    BOOST_CHECK_EQUAL(directional[0][1], 2);
+    BOOST_CHECK_EQUAL(directional[0][0], 0);
+    BOOST_CHECK_EQUAL(directional[1][1], 0);
+}
+
+BOOST_AUTO_TEST_CASE(RejectsDuplicateDirectionalFaceRegistration)
+{
+    Opm::EclIO::FluxFile::Data data;
+    data.localToGlobal = {10};
+    data.boundaryFaces = {
+        {0, static_cast<int>(Opm::FaceDir::XMinus), 9, 0.0},
+        {0, static_cast<int>(Opm::FaceDir::XMinus), 8, 0.0},
+    };
+
+    const auto boundary = Opm::FluxBoundary::fromData(data, {0});
+    BOOST_CHECK_THROW(boundary.buildDirectionalFaceIndices(1), std::invalid_argument);
+}

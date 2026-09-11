@@ -90,6 +90,45 @@ FluxBoundary FluxBoundary::load(const std::string& filename,
     return fromData(EclIO::FluxFile::read(filename), localToActive);
 }
 
+std::array<std::vector<int>, 6> FluxBoundary::buildDirectionalFaceIndices(const std::size_t numActiveCells) const
+{
+    std::array<std::vector<int>, 6> directionalFaceIndices;
+    for (auto& values : directionalFaceIndices) {
+        values.assign(numActiveCells, 0);
+    }
+
+    const auto dirToIndex = [](const FaceDir::DirEnum dir)
+    {
+        int idx = 0;
+        int div = static_cast<int>(dir);
+        while ((div /= 2) >= 1) {
+            ++idx;
+        }
+        return idx;
+    };
+
+    for (std::size_t faceIndex = 0; faceIndex < this->faces_.size(); ++faceIndex) {
+        const auto& face = this->faces_[faceIndex];
+        if (face.isNnc || face.direction == FaceDir::Unknown) {
+            continue;
+        }
+        if (face.interiorActiveCell < 0 || static_cast<std::size_t>(face.interiorActiveCell) >= numActiveCells) {
+            OPM_THROW(std::invalid_argument,
+                      "FluxBoundary: face references invalid active cell for directional mapping");
+        }
+
+        auto& slot = directionalFaceIndices[dirToIndex(face.direction)][face.interiorActiveCell];
+        if (slot != 0) {
+            OPM_THROW(std::invalid_argument,
+                      "FluxBoundary: duplicate FLUX boundary face for active cell and direction");
+        }
+
+        slot = static_cast<int>(faceIndex) + 1;
+    }
+
+    return directionalFaceIndices;
+}
+
 const EclIO::FluxFile::Data& FluxBoundary::data() const
 {
     return this->data_;

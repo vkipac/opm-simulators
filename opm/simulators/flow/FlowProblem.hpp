@@ -59,6 +59,7 @@
 #include <opm/simulators/flow/FlowGenericProblem.hpp>
 // TODO: maybe we can name it FlowProblemProperties.hpp
 #include <opm/simulators/flow/FlowBaseProblemProperties.hpp>
+#include <opm/simulators/flow/flux/FluxBoundary.hpp>
 #include <opm/simulators/flow/FlowUtils.hpp>
 #include <opm/simulators/flow/TracerModel.hpp>
 #include <opm/simulators/flow/TemperatureModel.hpp>
@@ -74,6 +75,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <filesystem>
 #include <functional>
 #include <set>
 #include <stdexcept>
@@ -1681,6 +1683,7 @@ protected:
     {
         const auto& simulator = this->simulator();
         const auto& vanguard = simulator.vanguard();
+        this->readFluxBoundary_();
         const auto& bcconfig = vanguard.eclState().getSimulationConfig().bcconfig();
         if (bcconfig.size() > 0) {
             nonTrivialBoundaryConditions_ = true;
@@ -1715,6 +1718,31 @@ protected:
                                  [&data,index](int elemIdx)
                                  { data[elemIdx] = index; });
             }
+        }
+    }
+
+    void readFluxBoundary_()
+    {
+        const auto& ioConfig = this->simulator().vanguard().eclState().getIOConfig();
+        if (!ioConfig.getUseFlux()) {
+            this->fluxBoundary_.reset();
+            this->fluxBoundaryFaceIndex_.data = {};
+            return;
+        }
+
+        const auto fluxPath = (std::filesystem::path{ioConfig.getInputDir()}
+                             / (ioConfig.getBaseName() + ".FLUX")).string();
+        const auto fluxData = EclIO::FluxFile::read(fluxPath);
+        auto fluxBoundary = FluxBoundary::fromData(fluxData,
+                                                   FluxBoundary::buildLocalToActive(fluxData.localToGlobal));
+
+        const auto numElems = this->simulator().vanguard().gridView().size(/*codim=*/0);
+        this->fluxBoundaryFaceIndex_.resize(numElems, 0);
+        this->fluxBoundaryFaceIndex_.data = fluxBoundary.buildDirectionalFaceIndices(numElems);
+        this->fluxBoundary_ = std::make_shared<FluxBoundary>(std::move(fluxBoundary));
+
+        if (!this->fluxBoundary_->faces().empty()) {
+            this->nonTrivialBoundaryConditions_ = true;
         }
     }
 
@@ -1902,6 +1930,8 @@ protected:
     virtual void handleUreaBC(const BCState::BCFace&, RateVector&) const = 0;
 
     BCData<int> bcindex_;
+    BCData<int> fluxBoundaryFaceIndex_;
+    std::shared_ptr<FluxBoundary> fluxBoundary_;
     bool nonTrivialBoundaryConditions_ = false;
     bool first_step_ = true;
 

@@ -23,6 +23,7 @@
 #include <opm/input/eclipse/EclipseState/Grid/FaceDir.hpp>
 #include <opm/io/eclipse/FluxFile.hpp>
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,8 @@ public:
 
     static FluxBoundary load(const std::string& filename,
                              const std::vector<int>& localToActive);
+
+    std::array<std::vector<int>, 6> buildDirectionalFaceIndices(std::size_t numActiveCells) const;
 
     const EclIO::FluxFile::Data& data() const;
     const std::vector<Face>& faces() const;
