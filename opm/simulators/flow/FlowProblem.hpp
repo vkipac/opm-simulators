@@ -1241,8 +1241,43 @@ public:
                 return { BCType::NONE, RateVector(0.0) };
             }
 
-            if (fluxData->header.mode == EclIO::FluxFile::Mode::Pressure
-                || fluxData->header.mode == EclIO::FluxFile::Mode::Both) {
+            const auto faceIndex = static_cast<std::size_t>(fluxSlot - 1);
+            const auto mode = fluxData->header.mode;
+            const auto fluxEnabled = (static_cast<int>(mode) & static_cast<int>(EclIO::FluxFile::Mode::Flux)) != 0;
+            const auto pressureEnabled = (static_cast<int>(mode) & static_cast<int>(EclIO::FluxFile::Mode::Pressure)) != 0;
+
+            if (fluxEnabled) {
+                const auto faceCount = static_cast<std::size_t>(fluxData->header.numBoundaryFaces);
+                const auto phaseCount = static_cast<std::size_t>(fluxData->header.numPhases);
+                const auto expectedSize = faceCount * phaseCount;
+                if (phaseCount > 0 && faceIndex < faceCount && fluxStep->rates.size() == expectedSize) {
+                    RateVector rate = 0.0;
+                    const auto base = faceIndex * phaseCount;
+                    std::size_t phaseSlot = 0;
+
+                    if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Oil)) {
+                        if (FluidSystem::phaseIsActive(oilPhaseIdx)) {
+                            rate[FluidSystem::canonicalToActiveCompIdx(oilCompIdx)] = fluxStep->rates[base + phaseSlot];
+                        }
+                        ++phaseSlot;
+                    }
+                    if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Water)) {
+                        if (FluidSystem::phaseIsActive(waterPhaseIdx)) {
+                            rate[FluidSystem::canonicalToActiveCompIdx(waterCompIdx)] = fluxStep->rates[base + phaseSlot];
+                        }
+                        ++phaseSlot;
+                    }
+                    if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Gas)) {
+                        if (FluidSystem::phaseIsActive(gasPhaseIdx)) {
+                            rate[FluidSystem::canonicalToActiveCompIdx(gasCompIdx)] = fluxStep->rates[base + phaseSlot];
+                        }
+                    }
+
+                    return { BCType::RATE, rate };
+                }
+            }
+
+            if (pressureEnabled) {
                 return { BCType::FREE, RateVector(0.0) };
             }
 
