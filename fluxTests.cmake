@@ -21,7 +21,7 @@ if (BUILD_FLOW)
       -i ${PROJECT_SOURCE_DIR}/tests/flux
       -r ${_flux_result_path}
       -f FLUX_DUMP_SMOKE
-      -p "${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check FLUX_DUMP_SMOKE.FLUX 10 1 10 10 1 5"
+        -p "${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check FLUX_DUMP_SMOKE.FLUX 10 1 10 10 1 5 FLUX"
   )
 
   set(_flux_multi_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_dump_multi_smoke)
@@ -35,6 +35,20 @@ if (BUILD_FLOW)
       -i ${PROJECT_SOURCE_DIR}/tests/flux
       -r ${_flux_multi_result_path}
       -f FLUX_DUMP_MULTI_SMOKE
-      -p "${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check FLUX_DUMP_MULTI_SMOKE.FLUX0001 10 1 10 10 1 5 FLUX_DUMP_MULTI_SMOKE.FLUX0002 10 1 10 1 1 10"
+      -p "${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check FLUX_DUMP_MULTI_SMOKE.FLUX0001 10 1 10 10 1 5 FLUX FLUX_DUMP_MULTI_SMOKE.FLUX0002 10 1 10 1 1 10 FLUX"
+  )
+
+  set(_flux_pressure_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_dump_pressure_smoke)
+
+  opm_add_test(flux_dump_pressure_smoke
+    DEPENDS
+      flux_smoke_shape_check
+    EXE_TARGET
+      flow_blackoil
+    DRIVER_ARGS
+      -i ${PROJECT_SOURCE_DIR}/tests/flux
+      -r ${_flux_pressure_result_path}
+      -f FLUX_DUMP_PRESSURE_SMOKE
+      -p "${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check FLUX_DUMP_PRESSURE_SMOKE.FLUX 10 1 10 10 1 5 PRESSURE"
   )
 endif()

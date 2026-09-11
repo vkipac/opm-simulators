@@ -1009,6 +1009,17 @@ private:
         return FluidSystem::oilCompIdx;
     }
 
+    EclIO::FluxFile::Mode fluxOutputMode_(const std::string& fluxType) const
+    {
+        if (fluxType == "PRESSURE") {
+            return EclIO::FluxFile::Mode::Pressure;
+        }
+        if (fluxType == "BOTH") {
+            return EclIO::FluxFile::Mode::Both;
+        }
+        return EclIO::FluxFile::Mode::Flux;
+    }
+
     static std::pair<int, int> normalizedNncPair_(const int c1, const int c2)
     {
         return (c1 <= c2)
@@ -1074,6 +1085,7 @@ private:
 
         const auto& io = state.getIOConfig();
         const auto phaseMask = this->fluxPhaseMask_();
+        const auto fluxMode = this->fluxOutputMode_(io.getFluxType());
 
         this->fluxOutputPaths_.clear();
         this->fluxDumpers_.reserve(regions.size());
@@ -1088,7 +1100,7 @@ private:
                                             region.regionId,
                                             dims,
                                             region,
-                                            EclIO::FluxFile::Mode::Flux,
+                                            fluxMode,
                                             EclIO::FluxFile::Sampling::Averaged,
                                             phaseMask);
 

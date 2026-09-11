@@ -19,6 +19,7 @@
 #include <opm/io/eclipse/FluxFile.hpp>
 
 #include <cstddef>
+#include <cctype>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
@@ -39,17 +40,54 @@ bool parseInt(const std::string& text, int& value)
     return is && is.eof();
 }
 
+std::string toUpper(std::string text)
+{
+    for (char& c : text) {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    return text;
+}
+
+bool parseMode(const std::string& text, Opm::EclIO::FluxFile::Mode& mode)
+{
+    const auto upper = toUpper(text);
+    if (upper == "FLUX") {
+        mode = Opm::EclIO::FluxFile::Mode::Flux;
+        return true;
+    }
+    if (upper == "PRESSURE") {
+        mode = Opm::EclIO::FluxFile::Mode::Pressure;
+        return true;
+    }
+    if (upper == "BOTH") {
+        mode = Opm::EclIO::FluxFile::Mode::Both;
+        return true;
+    }
+
+    return false;
+}
+
+bool hasFluxMode(const Opm::EclIO::FluxFile::Mode mode)
+{
+    return (static_cast<int>(mode) & static_cast<int>(Opm::EclIO::FluxFile::Mode::Flux)) != 0;
+}
+
+bool hasPressureMode(const Opm::EclIO::FluxFile::Mode mode)
+{
+    return (static_cast<int>(mode) & static_cast<int>(Opm::EclIO::FluxFile::Mode::Pressure)) != 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
-    // Arguments come in groups of 7 values:
-    // <file.FLUX> <nx> <ny> <nz> <i1> <j1> <k1>
-    constexpr int groupSize = 7;
+    // Arguments come in groups of 8 values:
+    // <file.FLUX> <nx> <ny> <nz> <i1> <j1> <k1> <mode>
+    constexpr int groupSize = 8;
     const int numArgs = argc - 1;
 
     if (numArgs < groupSize || (numArgs % groupSize) != 0) {
-        return fail("usage: flux_smoke_shape_check <file.FLUX> <nx> <ny> <nz> <i1> <j1> <k1> [repeat]");
+        return fail("usage: flux_smoke_shape_check <file.FLUX> <nx> <ny> <nz> <i1> <j1> <k1> <mode> [repeat]");
     }
 
     for (int base = 1; base < argc; base += groupSize) {
@@ -61,6 +99,7 @@ int main(int argc, char** argv)
         int expectedI1 = 0;
         int expectedJ1 = 0;
         int expectedK1 = 0;
+        Opm::EclIO::FluxFile::Mode expectedMode{};
 
         if (!parseInt(argv[base + 1], expectedNx)
             || !parseInt(argv[base + 2], expectedNy)
@@ -69,6 +108,9 @@ int main(int argc, char** argv)
             || !parseInt(argv[base + 5], expectedJ1)
             || !parseInt(argv[base + 6], expectedK1)) {
             return fail("failed to parse integer arguments for " + path);
+        }
+        if (!parseMode(argv[base + 7], expectedMode)) {
+            return fail("failed to parse mode argument for " + path);
         }
 
         const auto data = Opm::EclIO::FluxFile::read(path);
@@ -80,6 +122,10 @@ int main(int argc, char** argv)
 
         if (h.boxI1 != expectedI1 || h.boxJ1 != expectedJ1 || h.boxK1 != expectedK1) {
             return fail("unexpected FLUXREG box start in " + path);
+        }
+
+        if (h.mode != expectedMode) {
+            return fail("unexpected FLUXTYPE mode in " + path);
         }
 
         if (h.boxNx != 1 || h.boxNy != 1 || h.boxNz != 1) {
@@ -109,9 +155,33 @@ int main(int argc, char** argv)
         const std::size_t expectedRates = static_cast<std::size_t>(h.numBoundaryFaces)
                                         * static_cast<std::size_t>(h.numPhases);
 
+        const auto expectFlux = hasFluxMode(h.mode);
+        const auto expectPressure = hasPressureMode(h.mode);
+
         for (const auto& step : data.reportSteps) {
-            if (step.rates.size() != expectedRates) {
+            const auto expectedRateSize = expectFlux ? expectedRates : 0U;
+            if (step.rates.size() != expectedRateSize) {
                 return fail("unexpected FLXRATE payload size in " + path);
+            }
+
+            const auto expectedFaceSize = expectPressure
+                ? static_cast<std::size_t>(h.numBoundaryFaces)
+                : 0U;
+
+            if (step.pressures.size() != expectedFaceSize) {
+                return fail("unexpected FLXPRES payload size in " + path);
+            }
+            if (step.swat.size() != expectedFaceSize) {
+                return fail("unexpected FLXSATW payload size in " + path);
+            }
+            if (step.sgas.size() != expectedFaceSize) {
+                return fail("unexpected FLXSATG payload size in " + path);
+            }
+            if (step.rs.size() != expectedFaceSize) {
+                return fail("unexpected FLXRS payload size in " + path);
+            }
+            if (step.rv.size() != expectedFaceSize) {
+                return fail("unexpected FLXRV payload size in " + path);
             }
         }
     }
