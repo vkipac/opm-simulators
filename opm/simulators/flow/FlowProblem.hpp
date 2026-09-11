@@ -75,6 +75,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <set>
@@ -346,6 +347,7 @@ public:
             this->rockFraction_[1] = this->rockFraction_[0];
             updateRockFraction_();
             updatePffDofData_();
+            this->applyFluxBoundaryTransmissibilityOverrides_();
             this->model().linearizer().updateDiscretizationParameters();
         }
 
@@ -1829,9 +1831,17 @@ protected:
             return;
         }
 
-        const auto fluxPath = (std::filesystem::path{ioConfig.getInputDir()}
-                             / (ioConfig.getBaseName() + ".FLUX")).string();
-        const auto fluxData = EclIO::FluxFile::read(fluxPath);
+        const auto inputDir = std::filesystem::path{ioConfig.getInputDir()};
+        const auto baseName = ioConfig.getBaseName();
+        const auto fluxPath = inputDir / (baseName + ".FLUX");
+        const auto fluxPath0001 = inputDir / (baseName + ".FLUX0001");
+
+        std::filesystem::path selectedFluxPath = fluxPath;
+        if (!std::filesystem::exists(selectedFluxPath) && std::filesystem::exists(fluxPath0001)) {
+            selectedFluxPath = fluxPath0001;
+        }
+
+        const auto fluxData = EclIO::FluxFile::read(selectedFluxPath.string());
         auto fluxBoundary = FluxBoundary::fromData(fluxData,
                                                    FluxBoundary::buildLocalToActive(fluxData.localToGlobal));
 
@@ -1839,9 +1849,34 @@ protected:
         this->fluxBoundaryFaceIndex_.resize(numElems, 0);
         this->fluxBoundaryFaceIndex_.data = fluxBoundary.buildDirectionalFaceIndices(numElems);
         this->fluxBoundary_ = std::make_shared<FluxBoundary>(std::move(fluxBoundary));
+        this->applyFluxBoundaryTransmissibilityOverrides_();
 
         if (!this->fluxBoundary_->faces().empty()) {
             this->nonTrivialBoundaryConditions_ = true;
+        }
+    }
+
+    void applyFluxBoundaryTransmissibilityOverrides_()
+    {
+        if (!this->fluxBoundary_) {
+            return;
+        }
+
+        for (const auto& face : this->fluxBoundary_->faces()) {
+            if (face.isNnc || face.direction == FaceDir::Unknown) {
+                continue;
+            }
+            if (face.interiorActiveCell < 0) {
+                continue;
+            }
+            if (!std::isfinite(face.transmissibility) || face.transmissibility <= 0.0) {
+                continue;
+            }
+
+            const auto boundaryFaceIdx = static_cast<unsigned>(FaceDir::ToIntersectionIndex(face.direction));
+            transmissibilities_.setTransmissibilityBoundary(static_cast<unsigned>(face.interiorActiveCell),
+                                                            boundaryFaceIdx,
+                                                            static_cast<Scalar>(face.transmissibility));
         }
     }
 
