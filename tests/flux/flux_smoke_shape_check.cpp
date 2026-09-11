@@ -18,8 +18,10 @@
 
 #include <opm/io/eclipse/FluxFile.hpp>
 
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 namespace {
@@ -30,55 +32,87 @@ int fail(const std::string& msg)
     return EXIT_FAILURE;
 }
 
+bool parseInt(const std::string& text, int& value)
+{
+    std::istringstream is{text};
+    is >> value;
+    return is && is.eof();
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
-    if (argc != 2) {
-        return fail("usage: flux_smoke_shape_check <file.FLUX>");
+    // Arguments come in groups of 7 values:
+    // <file.FLUX> <nx> <ny> <nz> <i1> <j1> <k1>
+    constexpr int groupSize = 7;
+    const int numArgs = argc - 1;
+
+    if (numArgs < groupSize || (numArgs % groupSize) != 0) {
+        return fail("usage: flux_smoke_shape_check <file.FLUX> <nx> <ny> <nz> <i1> <j1> <k1> [repeat]");
     }
 
-    const auto data = Opm::EclIO::FluxFile::read(argv[1]);
-    const auto& h = data.header;
+    for (int base = 1; base < argc; base += groupSize) {
+        const std::string path = argv[base + 0];
 
-    if (h.parentNx != 10 || h.parentNy != 1 || h.parentNz != 10) {
-        return fail("unexpected parent dimensions");
-    }
+        int expectedNx = 0;
+        int expectedNy = 0;
+        int expectedNz = 0;
+        int expectedI1 = 0;
+        int expectedJ1 = 0;
+        int expectedK1 = 0;
 
-    if (h.boxI1 != 10 || h.boxJ1 != 1 || h.boxK1 != 5) {
-        return fail("unexpected FLUXREG box start");
-    }
+        if (!parseInt(argv[base + 1], expectedNx)
+            || !parseInt(argv[base + 2], expectedNy)
+            || !parseInt(argv[base + 3], expectedNz)
+            || !parseInt(argv[base + 4], expectedI1)
+            || !parseInt(argv[base + 5], expectedJ1)
+            || !parseInt(argv[base + 6], expectedK1)) {
+            return fail("failed to parse integer arguments for " + path);
+        }
 
-    if (h.boxNx != 1 || h.boxNy != 1 || h.boxNz != 1) {
-        return fail("unexpected FLUXREG box dimensions");
-    }
+        const auto data = Opm::EclIO::FluxFile::read(path);
+        const auto& h = data.header;
 
-    if (h.numCells != 1 || data.localToGlobal.size() != 1U) {
-        return fail("unexpected cell mapping size");
-    }
+        if (h.parentNx != expectedNx || h.parentNy != expectedNy || h.parentNz != expectedNz) {
+            return fail("unexpected parent dimensions in " + path);
+        }
 
-    if (h.numBoundaryFaces <= 0) {
-        return fail("missing boundary faces");
-    }
+        if (h.boxI1 != expectedI1 || h.boxJ1 != expectedJ1 || h.boxK1 != expectedK1) {
+            return fail("unexpected FLUXREG box start in " + path);
+        }
 
-    if (data.boundaryFaces.size() != static_cast<std::size_t>(h.numBoundaryFaces)) {
-        return fail("boundary face count mismatch");
-    }
+        if (h.boxNx != 1 || h.boxNy != 1 || h.boxNz != 1) {
+            return fail("unexpected FLUXREG box dimensions in " + path);
+        }
 
-    if (h.numReportSteps <= 0) {
-        return fail("missing report steps");
-    }
+        if (h.numCells != 1 || data.localToGlobal.size() != 1U) {
+            return fail("unexpected cell mapping size in " + path);
+        }
 
-    if (data.reportSteps.size() != static_cast<std::size_t>(h.numReportSteps)) {
-        return fail("report step count mismatch");
-    }
+        if (h.numBoundaryFaces <= 0) {
+            return fail("missing boundary faces in " + path);
+        }
 
-    const std::size_t expectedRates = static_cast<std::size_t>(h.numBoundaryFaces)
-                                    * static_cast<std::size_t>(h.numPhases);
+        if (data.boundaryFaces.size() != static_cast<std::size_t>(h.numBoundaryFaces)) {
+            return fail("boundary face count mismatch in " + path);
+        }
 
-    for (const auto& step : data.reportSteps) {
-        if (step.rates.size() != expectedRates) {
-            return fail("unexpected FLXRATE payload size");
+        if (h.numReportSteps <= 0) {
+            return fail("missing report steps in " + path);
+        }
+
+        if (data.reportSteps.size() != static_cast<std::size_t>(h.numReportSteps)) {
+            return fail("report step count mismatch in " + path);
+        }
+
+        const std::size_t expectedRates = static_cast<std::size_t>(h.numBoundaryFaces)
+                                        * static_cast<std::size_t>(h.numPhases);
+
+        for (const auto& step : data.reportSteps) {
+            if (step.rates.size() != expectedRates) {
+                return fail("unexpected FLXRATE payload size in " + path);
+            }
         }
     }
 
