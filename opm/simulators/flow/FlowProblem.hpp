@@ -1253,23 +1253,30 @@ public:
                 if (phaseCount > 0 && faceIndex < faceCount && fluxStep->rates.size() == expectedSize) {
                     RateVector rate = 0.0;
                     const auto base = faceIndex * phaseCount;
+                    const auto pvtRegionIdx = this->pvtRegionIndex(globalSpaceIdx);
                     std::size_t phaseSlot = 0;
 
                     if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Oil)) {
                         if (FluidSystem::phaseIsActive(oilPhaseIdx)) {
-                            rate[FluidSystem::canonicalToActiveCompIdx(oilCompIdx)] = fluxStep->rates[base + phaseSlot];
+                            rate[FluidSystem::canonicalToActiveCompIdx(oilCompIdx)] =
+                                fluxStep->rates[base + phaseSlot]
+                                * FluidSystem::referenceDensity(oilPhaseIdx, pvtRegionIdx);
                         }
                         ++phaseSlot;
                     }
                     if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Water)) {
                         if (FluidSystem::phaseIsActive(waterPhaseIdx)) {
-                            rate[FluidSystem::canonicalToActiveCompIdx(waterCompIdx)] = fluxStep->rates[base + phaseSlot];
+                            rate[FluidSystem::canonicalToActiveCompIdx(waterCompIdx)] =
+                                fluxStep->rates[base + phaseSlot]
+                                * FluidSystem::referenceDensity(waterPhaseIdx, pvtRegionIdx);
                         }
                         ++phaseSlot;
                     }
                     if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Gas)) {
                         if (FluidSystem::phaseIsActive(gasPhaseIdx)) {
-                            rate[FluidSystem::canonicalToActiveCompIdx(gasCompIdx)] = fluxStep->rates[base + phaseSlot];
+                            rate[FluidSystem::canonicalToActiveCompIdx(gasCompIdx)] =
+                                fluxStep->rates[base + phaseSlot]
+                                * FluidSystem::referenceDensity(gasPhaseIdx, pvtRegionIdx);
                         }
                     }
 

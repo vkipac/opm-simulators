@@ -14,3 +14,4 @@ cp "$consumer_deck" FLUX_USE_FLUX_SMOKE.DATA
 "$flow_bin" FLUX_USE_FLUX_SMOKE.DATA > useflux_flux_smoke.log 2>&1
 
 grep -q "Total number of active cells: 100" useflux_flux_smoke.log
+grep -q "End of simulation" useflux_flux_smoke.log
