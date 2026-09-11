@@ -1006,6 +1006,13 @@ private:
         return FluidSystem::oilCompIdx;
     }
 
+    static std::pair<int, int> normalizedNncPair_(const int c1, const int c2)
+    {
+        return (c1 <= c2)
+            ? std::make_pair(c1, c2)
+            : std::make_pair(c2, c1);
+    }
+
     void initializeFluxDumpers_()
     {
         if (!this->collectOnIORank_.isIORank()) {
@@ -1023,6 +1030,8 @@ private:
         const auto dims = state.gridDims().getNXYZ();
 
         std::vector<std::array<int, 2>> nncConnections;
+        this->fluxNncPairToIndex_.clear();
+        int nncIndex = 0;
         if (state.hasInputNNC()) {
             const auto& inputNnc = state.getInputNNC().input();
             nncConnections.reserve(inputNnc.size());
@@ -1031,6 +1040,11 @@ private:
                     static_cast<int>(nnc.cell1),
                     static_cast<int>(nnc.cell2),
                 });
+
+                const auto key = normalizedNncPair_(static_cast<int>(nnc.cell1),
+                                                    static_cast<int>(nnc.cell2));
+                this->fluxNncPairToIndex_.try_emplace(key, nncIndex);
+                ++nncIndex;
             }
         }
 
@@ -1042,6 +1056,11 @@ private:
                     static_cast<int>(nnc.cell1),
                     static_cast<int>(nnc.cell2),
                 });
+
+                const auto key = normalizedNncPair_(static_cast<int>(nnc.cell1),
+                                                    static_cast<int>(nnc.cell2));
+                this->fluxNncPairToIndex_.try_emplace(key, nncIndex);
+                ++nncIndex;
             }
         }
 
@@ -1076,6 +1095,9 @@ private:
         }
 
         const auto& flows = this->outputModule_->getFlows();
+        const auto& floresn = this->collectOnIORank_.isParallel()
+            ? this->collectOnIORank_.globalFloresn()
+            : flows.getFloresn();
         const auto simStep = simulator_.timeStepIndex();
         const auto startTime = simulator_.time();
         const auto stepLength = simulator_.timeStepSize();
@@ -1090,14 +1112,36 @@ private:
                 // flows.getFlores is oriented by the interior-cell face direction.
                 // FLUX file convention is positive into the sector, i.e. opposite sign.
                 step.rates = dumper.makeFaceMajorRates(
-                    [&flows, this](const FluxRegions::BoundaryFace& face,
-                                   const EclIO::FluxFile::Phase phase)
+                    [&flows, &floresn, this](const FluxRegions::BoundaryFace& face,
+                                             const EclIO::FluxFile::Phase phase)
                     {
-                        if (face.isNnc || face.direction == FaceDir::Unknown) {
+                        const auto comp = this->fluxComponentIndex_(phase);
+
+                        if (face.isNnc) {
+                            const auto key = normalizedNncPair_(face.interiorGlobalCell,
+                                                                face.exteriorGlobalCell);
+                            const auto it = this->fluxNncPairToIndex_.find(key);
+                            if (it == this->fluxNncPairToIndex_.end()) {
+                                return 0.0;
+                            }
+
+                            const auto nncIdx = static_cast<std::size_t>(it->second);
+                            if (nncIdx >= floresn[comp].values.size()) {
+                                return 0.0;
+                            }
+
+                            // For NNC values we assume the stored direction is cell1->cell2
+                            // of the normalized pair and flip sign if the interior is cell1.
+                            const auto nncFlux = floresn[comp].values[nncIdx];
+                            return (face.interiorGlobalCell == key.second)
+                                ? nncFlux
+                                : -nncFlux;
+                        }
+
+                        if (face.direction == FaceDir::Unknown) {
                             return 0.0;
                         }
 
-                        const auto comp = this->fluxComponentIndex_(phase);
                         return -flows.getFlores(face.interiorGlobalCell, face.direction, comp);
                     });
             }
@@ -1112,6 +1156,7 @@ private:
     int rank_ ;
     Inplace inplace_;
     std::vector<FluxDumper> fluxDumpers_;
+    std::map<std::pair<int, int>, int> fluxNncPairToIndex_;
 };
 
 } // namespace Opm

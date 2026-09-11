@@ -255,3 +255,32 @@ BOOST_AUTO_TEST_CASE(FlattensFaceMajorRatesInCanonicalPhaseOrder)
   BOOST_CHECK_CLOSE(rates[2], globalIndex(dims, 3, 1, 1) * 100.0 + 10.0, 1e-12);
   BOOST_CHECK_CLOSE(rates[3], globalIndex(dims, 3, 1, 1) * 100.0 + 30.0, 1e-12);
 }
+
+BOOST_AUTO_TEST_CASE(FlattensNncBoundaryFaceRates)
+{
+  const std::array<int, 3> dims{3, 1, 1};
+  std::vector<int> regionValues(dims[0] * dims[1] * dims[2], 0);
+  regionValues[globalIndex(dims, 1, 1, 1)] = 8;
+
+  const std::vector<std::array<int, 2>> nnc{
+    {globalIndex(dims, 1, 1, 1), globalIndex(dims, 3, 1, 1)}
+  };
+
+  const auto regions = Opm::FluxRegions::extract(dims, regionValues, nnc);
+  BOOST_REQUIRE_EQUAL(regions.size(), 1U);
+
+  Opm::FluxDumper dumper("PARENT", 8, dims, regions.front(),
+               Opm::EclIO::FluxFile::Mode::Flux,
+               Opm::EclIO::FluxFile::Sampling::Instant,
+               static_cast<int>(Opm::EclIO::FluxFile::Phase::Oil));
+
+  const auto rates = dumper.makeFaceMajorRates(
+    [](const Opm::FluxRegions::BoundaryFace& face, const Opm::EclIO::FluxFile::Phase)
+    {
+      return face.isNnc ? 99.0 : 11.0;
+    });
+
+  BOOST_REQUIRE_EQUAL(rates.size(), 2U);
+  BOOST_CHECK_CLOSE(rates[0], 11.0, 1e-12);
+  BOOST_CHECK_CLOSE(rates[1], 99.0, 1e-12);
+}
