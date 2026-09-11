@@ -76,6 +76,7 @@
 #include <opm/simulators/utils/ParallelSerialization.hpp>
 #include <opm/simulators/utils/PartiallySupportedFlowKeywords.hpp>
 #include <opm/simulators/utils/UnsupportedFlowKeywords.hpp>
+#include <opm/simulators/flow/flux/FluxActivation.hpp>
 
 #include <fmt/format.h>
 
@@ -822,6 +823,9 @@ void Opm::readDeck(Opm::Parallel::Communication    comm,
                          summaryConfig, std::move(python), initFromRestart,
                          checkDeck, treatCriticalAsNonCritical, lowActionParsingStrictness,
                          keepKeywords, outputInterval, *errorGuard, slaveMode);
+
+            assert(eclipseState);
+            applyUseFluxActnum(*eclipseState);
 
             // Update schedule so that re-parsing after actions use same strictness
             assert(schedule);

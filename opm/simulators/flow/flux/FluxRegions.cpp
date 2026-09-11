@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <limits>
 #include <map>
+#include <stdexcept>
 #include <set>
 #include <unordered_set>
 
@@ -327,6 +328,39 @@ std::vector<FluxRegions::Region> FluxRegions::extract(const std::array<int, 3>& 
     }
 
     return regions;
+}
+
+int FluxRegions::uniqueSelectedRegion(const std::vector<int>& regionValues)
+{
+    std::set<int> regionIds;
+    for (const auto value : regionValues) {
+        if (value > 0) {
+            regionIds.insert(value);
+        }
+    }
+
+    if (regionIds.empty()) {
+        OPM_THROW(std::invalid_argument,
+                  "FluxRegions::uniqueSelectedRegion(): FLUXNUM must contain at least one positive region id");
+    }
+
+    if (regionIds.size() != 1U) {
+        OPM_THROW(std::invalid_argument,
+                  "FluxRegions::uniqueSelectedRegion(): FLUXNUM must contain exactly one positive region id");
+    }
+
+    return *regionIds.begin();
+}
+
+std::vector<int> FluxRegions::buildActnum(const std::vector<int>& regionValues,
+                                          const int regionId)
+{
+    std::vector<int> actnum(regionValues.size(), 0);
+    for (std::size_t index = 0; index < regionValues.size(); ++index) {
+        actnum[index] = (regionValues[index] == regionId) ? 1 : 0;
+    }
+
+    return actnum;
 }
 
 } // namespace Opm

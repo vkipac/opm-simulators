@@ -77,7 +77,7 @@ if (BUILD_FLOW)
       -i ${PROJECT_SOURCE_DIR}/tests/flux
       -r ${_flux_invalid_type_result_path}
       -f FLUX_DUMP_INVALID_TYPE_SMOKE
-        -p "bash -lc \"${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check FLUX_DUMP_INVALID_TYPE_SMOKE.FLUX 10 1 10 10 1 5 FLUX && grep -q \'Unrecognized FLUXTYPE BC_TYPE value '\''BANANA'\'', defaulting to FLUX output mode\' FLUX_DUMP_INVALID_TYPE_SMOKE.PRT\""
+        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-invalid-type-smoke.sh ${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check"
   )
 
   set(_flux_mixed_case_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_dump_mixed_case_smoke)

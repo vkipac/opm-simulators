@@ -85,6 +85,29 @@ BOOST_AUTO_TEST_CASE(RejectsWrongRegionVectorSize)
     BOOST_CHECK_THROW(Opm::FluxRegions::extract(dims, std::vector<int>{1, 2, 3}), std::invalid_argument);
 }
 
+BOOST_AUTO_TEST_CASE(DetectsUniqueSelectedRegion)
+{
+    const std::vector<int> regions{0, 4, 4, 0, 4};
+    BOOST_CHECK_EQUAL(Opm::FluxRegions::uniqueSelectedRegion(regions), 4);
+}
+
+BOOST_AUTO_TEST_CASE(RejectsMissingOrAmbiguousSelectedRegion)
+{
+    BOOST_CHECK_THROW(Opm::FluxRegions::uniqueSelectedRegion(std::vector<int>{0, 0, 0}), std::invalid_argument);
+    BOOST_CHECK_THROW(Opm::FluxRegions::uniqueSelectedRegion(std::vector<int>{1, 0, 2}), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(BuildsActnumForSelectedRegion)
+{
+    const auto actnum = Opm::FluxRegions::buildActnum(std::vector<int>{0, 2, 3, 2, 0}, 2);
+    BOOST_REQUIRE_EQUAL(actnum.size(), 5U);
+    BOOST_CHECK_EQUAL(actnum[0], 0);
+    BOOST_CHECK_EQUAL(actnum[1], 1);
+    BOOST_CHECK_EQUAL(actnum[2], 0);
+    BOOST_CHECK_EQUAL(actnum[3], 1);
+    BOOST_CHECK_EQUAL(actnum[4], 0);
+}
+
 BOOST_AUTO_TEST_CASE(ExtractsCartesianBoundaryFaces)
 {
     const std::array<int, 3> dims{4, 1, 1};

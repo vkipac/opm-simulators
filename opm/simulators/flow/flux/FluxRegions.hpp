@@ -72,6 +72,11 @@ public:
                                        const std::vector<int>& regionValues,
                                        const std::vector<std::array<int, 2>>& nncConnections);
 
+    static int uniqueSelectedRegion(const std::vector<int>& regionValues);
+
+    static std::vector<int> buildActnum(const std::vector<int>& regionValues,
+                                        int regionId);
+
     static int cartesianIndex(const std::array<int, 3>& dims,
                               int i,
                               int j,
