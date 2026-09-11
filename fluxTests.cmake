@@ -93,4 +93,18 @@ if (BUILD_FLOW)
       -f FLUX_DUMP_MIXED_CASE_SMOKE
       -p "${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check FLUX_DUMP_MIXED_CASE_SMOKE.FLUX 10 1 10 10 1 5 BOTH"
   )
+
+  set(_useflux_pressure_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+useflux_pressure_smoke)
+
+  opm_add_test(useflux_pressure_smoke
+    DEPENDS
+      flux_smoke_shape_check
+    EXE_TARGET
+      flow_blackoil
+    DRIVER_ARGS
+      -i ${PROJECT_SOURCE_DIR}/tests/flux
+      -r ${_useflux_pressure_result_path}
+      -f FLUX_DUMP_PRESSURE_SMOKE
+      -p "bash ${PROJECT_SOURCE_DIR}/tests/check-useflux-pressure-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_PRESSURE_SMOKE.DATA"
+  )
 endif()

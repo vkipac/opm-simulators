@@ -793,10 +793,123 @@ public:
     InitialFluidState boundaryFluidState(unsigned globalDofIdx, const int directionId) const
     {
         OPM_TIMEBLOCK_LOCAL(boundaryFluidState, Subsystem::Assembly);
+        const FaceDir::DirEnum dir = FaceDir::FromIntersectionIndex(directionId);
+
+        const auto* fluxData = this->fluxBoundaryData_();
+        const auto* fluxFace = this->fluxBoundaryFace_(globalDofIdx, dir);
+        const auto* fluxStep = this->fluxBoundaryReportStep_();
+        if (fluxData && fluxFace && fluxStep
+            && (fluxData->header.mode == EclIO::FluxFile::Mode::Pressure
+                || fluxData->header.mode == EclIO::FluxFile::Mode::Both)) {
+            const auto fluxSlot = this->fluxBoundaryFaceSlot_(globalDofIdx, dir);
+            const auto fluxFaceIndex = static_cast<std::size_t>(fluxSlot - 1);
+            if (fluxSlot > 0 && fluxFaceIndex < fluxStep->pressures.size()) {
+                InitialFluidState fluidState;
+                const int pvtRegionIdx = this->pvtRegionIndex(globalDofIdx);
+                fluidState.setPvtRegionIndex(pvtRegionIdx);
+
+                const auto& initialState = initialFluidStates_[globalDofIdx];
+                double sw = FluidSystem::phaseIsActive(waterPhaseIdx)
+                          ? initialState.saturation(waterPhaseIdx)
+                          : 0.0;
+                double sg = FluidSystem::phaseIsActive(gasPhaseIdx)
+                          ? initialState.saturation(gasPhaseIdx)
+                          : 0.0;
+
+                if (fluxFaceIndex < fluxStep->swat.size()) {
+                    sw = fluxStep->swat[fluxFaceIndex];
+                }
+                if (fluxFaceIndex < fluxStep->sgas.size()) {
+                    sg = fluxStep->sgas[fluxFaceIndex];
+                }
+
+                sw = std::clamp(sw, 0.0, 1.0);
+                sg = std::clamp(sg, 0.0, 1.0);
+                const double so = std::clamp(1.0 - sw - sg, 0.0, 1.0);
+
+                if (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)) {
+                    fluidState.setSaturation(FluidSystem::waterPhaseIdx, sw);
+                }
+                if (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
+                    fluidState.setSaturation(FluidSystem::gasPhaseIdx, sg);
+                }
+                if (FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)) {
+                    fluidState.setSaturation(FluidSystem::oilPhaseIdx, so);
+                }
+                fluidState.setTotalSaturation(1.0);
+
+                const double pressure = fluxStep->pressures[fluxFaceIndex];
+                std::array<Scalar, numPhases> pc = {0};
+                const auto& matParams = this->materialLawParams(globalDofIdx);
+                MaterialLaw::capillaryPressures(pc, matParams, fluidState);
+                Valgrind::CheckDefined(pressure);
+                Valgrind::CheckDefined(pc);
+                for (unsigned activePhaseIdx = 0; activePhaseIdx < FluidSystem::numActivePhases(); ++activePhaseIdx) {
+                    const auto phaseIdx = FluidSystem::activeToCanonicalPhaseIdx(activePhaseIdx);
+                    if (Indices::oilEnabled)
+                        fluidState.setPressure(phaseIdx, pressure + (pc[phaseIdx] - pc[oilPhaseIdx]));
+                    else if (Indices::gasEnabled)
+                        fluidState.setPressure(phaseIdx, pressure + (pc[phaseIdx] - pc[gasPhaseIdx]));
+                    else if (Indices::waterEnabled)
+                        fluidState.setPressure(phaseIdx, pressure);
+                }
+
+                if constexpr (energyModuleType != EnergyModules::NoTemperature) {
+                    double temperature = initialState.temperature(0);
+                    if (fluxFaceIndex < fluxStep->temperature.size()) {
+                        temperature = fluxStep->temperature[fluxFaceIndex];
+                    }
+                    fluidState.setTemperature(temperature);
+                }
+
+                if constexpr (enableDissolvedGas) {
+                    if (FluidSystem::enableDissolvedGas()) {
+                        if (fluxFaceIndex < fluxStep->rs.size()) {
+                            fluidState.setRs(fluxStep->rs[fluxFaceIndex]);
+                        }
+                        else {
+                            fluidState.setRs(0.0);
+                        }
+                        if (fluxFaceIndex < fluxStep->rv.size()) {
+                            fluidState.setRv(fluxStep->rv[fluxFaceIndex]);
+                        }
+                        else {
+                            fluidState.setRv(0.0);
+                        }
+                    }
+                }
+                if constexpr (enableDisgasInWater) {
+                    if (FluidSystem::enableDissolvedGasInWater()) {
+                        fluidState.setRsw(0.0);
+                    }
+                }
+                if constexpr (enableVapwat) {
+                    if (FluidSystem::enableVaporizedWater()) {
+                        fluidState.setRvw(0.0);
+                    }
+                }
+
+                for (unsigned activePhaseIdx = 0; activePhaseIdx < FluidSystem::numActivePhases(); ++activePhaseIdx) {
+                    const auto phaseIdx = FluidSystem::activeToCanonicalPhaseIdx(activePhaseIdx);
+
+                    const auto& b = FluidSystem::inverseFormationVolumeFactor(fluidState, phaseIdx, pvtRegionIdx);
+                    fluidState.setInvB(phaseIdx, b);
+
+                    const auto& rho = FluidSystem::density(fluidState, phaseIdx, pvtRegionIdx);
+                    fluidState.setDensity(phaseIdx, rho);
+                    if constexpr (energyModuleType == EnergyModules::FullyImplicitThermal) {
+                        const auto& h = FluidSystem::enthalpy(fluidState, phaseIdx, pvtRegionIdx);
+                        fluidState.setEnthalpy(phaseIdx, h);
+                    }
+                }
+
+                fluidState.checkDefined();
+                return fluidState;
+            }
+        }
+
         const auto& bcstate = this->simulator().vanguard().schedule()[this->episodeIndex()].bcstate;
         if (bcstate.size() > 0) {
-            FaceDir::DirEnum dir = FaceDir::FromIntersectionIndex(directionId);
-
             // index == 0: no boundary conditions for this
             // global cell and direction
             if (this->bcindex_(dir)[globalDofIdx] == 0)

@@ -1229,15 +1229,31 @@ public:
         if (!nonTrivialBoundaryConditions_) {
             return { BCType::NONE, RateVector(0.0) };
         }
-        FaceDir::DirEnum dir = FaceDir::FromIntersectionIndex(directionId);
-        const auto& schedule = this->simulator().vanguard().schedule();
-        if (bcindex_(dir)[globalSpaceIdx] == 0) {
+        const FaceDir::DirEnum dir = FaceDir::FromIntersectionIndex(directionId);
+
+        const auto& bcDirIndex = bcindex_(dir);
+        const bool hasDeckBc = globalSpaceIdx < bcDirIndex.size() && bcDirIndex[globalSpaceIdx] != 0;
+        if (!hasDeckBc) {
+            const auto* fluxData = this->fluxBoundaryData_();
+            const auto* fluxStep = this->fluxBoundaryReportStep_();
+            const auto fluxSlot = this->fluxBoundaryFaceSlot_(globalSpaceIdx, dir);
+            if (!fluxData || !fluxStep || fluxSlot <= 0) {
+                return { BCType::NONE, RateVector(0.0) };
+            }
+
+            if (fluxData->header.mode == EclIO::FluxFile::Mode::Pressure
+                || fluxData->header.mode == EclIO::FluxFile::Mode::Both) {
+                return { BCType::FREE, RateVector(0.0) };
+            }
+
             return { BCType::NONE, RateVector(0.0) };
         }
+
+        const auto& schedule = this->simulator().vanguard().schedule();
         if (schedule[this->episodeIndex()].bcstate.size() == 0) {
             return { BCType::NONE, RateVector(0.0) };
         }
-        const auto& bc = schedule[this->episodeIndex()].bcstate[bcindex_(dir)[globalSpaceIdx]];
+        const auto& bc = schedule[this->episodeIndex()].bcstate[bcDirIndex[globalSpaceIdx]];
         if (bc.bctype!=BCType::RATE) {
             return { bc.bctype, RateVector(0.0) };
         }
@@ -1276,6 +1292,47 @@ public:
         return {bc.bctype, rate};
     }
 
+protected:
+    int fluxBoundaryFaceSlot_(const unsigned int globalSpaceIdx, const FaceDir::DirEnum dir) const
+    {
+        const auto& dirData = fluxBoundaryFaceIndex_(dir);
+        if (globalSpaceIdx >= dirData.size()) {
+            return 0;
+        }
+
+        return dirData[globalSpaceIdx];
+    }
+
+    const FluxBoundary::Face* fluxBoundaryFace_(const unsigned int globalSpaceIdx,
+                                                const FaceDir::DirEnum dir) const
+    {
+        if (!this->fluxBoundary_) {
+            return nullptr;
+        }
+
+        return this->fluxBoundary_->faceFromSlot(this->fluxBoundaryFaceSlot_(globalSpaceIdx, dir));
+    }
+
+    const EclIO::FluxFile::Data* fluxBoundaryData_() const
+    {
+        if (!this->fluxBoundary_) {
+            return nullptr;
+        }
+
+        return &this->fluxBoundary_->data();
+    }
+
+    const EclIO::FluxFile::ReportStep* fluxBoundaryReportStep_() const
+    {
+        const auto* data = this->fluxBoundaryData_();
+        if (!data) {
+            return nullptr;
+        }
+
+        return FluxBoundary::selectReportStep(*data, this->episodeIndex());
+    }
+
+public:
 
     template<class Serializer>
     void serializeOp(Serializer& serializer)

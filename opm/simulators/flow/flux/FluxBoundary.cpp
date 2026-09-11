@@ -21,6 +21,7 @@
 
 #include <opm/common/ErrorMacros.hpp>
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace Opm {
@@ -90,6 +91,52 @@ FluxBoundary FluxBoundary::load(const std::string& filename,
     return fromData(EclIO::FluxFile::read(filename), localToActive);
 }
 
+const EclIO::FluxFile::ReportStep* FluxBoundary::selectReportStep(const EclIO::FluxFile::Data& data,
+                                                                   const int episodeIndex)
+{
+    if (data.reportSteps.empty()) {
+        return nullptr;
+    }
+
+    const auto byReportStep = static_cast<int>(std::count_if(data.reportSteps.begin(),
+                                                              data.reportSteps.end(),
+                                                              [episodeIndex](const auto& step)
+                                                              {
+                                                                  return step.reportStep == episodeIndex;
+                                                              }));
+    if (byReportStep > 0) {
+        const auto it = std::find_if(data.reportSteps.begin(),
+                                     data.reportSteps.end(),
+                                     [episodeIndex](const auto& step)
+                                     {
+                                         return step.reportStep == episodeIndex;
+                                     });
+        return &(*it);
+    }
+
+    const auto byOneBased = episodeIndex + 1;
+    const auto byOneBasedCount = static_cast<int>(std::count_if(data.reportSteps.begin(),
+                                                                 data.reportSteps.end(),
+                                                                 [byOneBased](const auto& step)
+                                                                 {
+                                                                     return step.reportStep == byOneBased;
+                                                                 }));
+    if (byOneBasedCount > 0) {
+        const auto it = std::find_if(data.reportSteps.begin(),
+                                     data.reportSteps.end(),
+                                     [byOneBased](const auto& step)
+                                     {
+                                         return step.reportStep == byOneBased;
+                                     });
+        return &(*it);
+    }
+
+    const auto nonNegativeEpisode = std::max(episodeIndex, 0);
+    const auto index = std::min(static_cast<std::size_t>(nonNegativeEpisode),
+                                data.reportSteps.size() - 1);
+    return &data.reportSteps[index];
+}
+
 std::array<std::vector<int>, 6> FluxBoundary::buildDirectionalFaceIndices(const std::size_t numActiveCells) const
 {
     std::array<std::vector<int>, 6> directionalFaceIndices;
@@ -127,6 +174,20 @@ std::array<std::vector<int>, 6> FluxBoundary::buildDirectionalFaceIndices(const 
     }
 
     return directionalFaceIndices;
+}
+
+const FluxBoundary::Face* FluxBoundary::faceFromSlot(const int slot) const
+{
+    if (slot <= 0) {
+        return nullptr;
+    }
+
+    const auto faceIndex = static_cast<std::size_t>(slot - 1);
+    if (faceIndex >= this->faces_.size()) {
+        return nullptr;
+    }
+
+    return &this->faces_[faceIndex];
 }
 
 const EclIO::FluxFile::Data& FluxBoundary::data() const

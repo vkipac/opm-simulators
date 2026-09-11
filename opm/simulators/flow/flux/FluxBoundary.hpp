@@ -52,7 +52,11 @@ public:
     static FluxBoundary load(const std::string& filename,
                              const std::vector<int>& localToActive);
 
+    static const EclIO::FluxFile::ReportStep* selectReportStep(const EclIO::FluxFile::Data& data,
+                                                                int episodeIndex);
+
     std::array<std::vector<int>, 6> buildDirectionalFaceIndices(std::size_t numActiveCells) const;
+    const Face* faceFromSlot(int slot) const;
 
     const EclIO::FluxFile::Data& data() const;
     const std::vector<Face>& faces() const;

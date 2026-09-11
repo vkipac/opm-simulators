@@ -195,3 +195,55 @@ BOOST_AUTO_TEST_CASE(RejectsDuplicateDirectionalFaceRegistration)
     const auto boundary = Opm::FluxBoundary::fromData(data, {0});
     BOOST_CHECK_THROW(boundary.buildDirectionalFaceIndices(1), std::invalid_argument);
 }
+
+BOOST_AUTO_TEST_CASE(ReturnsFaceFromDirectionalSlot)
+{
+    Opm::EclIO::FluxFile::Data data;
+    data.localToGlobal = {10, 11};
+    data.boundaryFaces = {
+        {0, static_cast<int>(Opm::FaceDir::XMinus), 9, 1.0},
+        {1, static_cast<int>(Opm::FaceDir::XPlus), 12, 2.0},
+    };
+
+    const auto boundary = Opm::FluxBoundary::fromData(data, {0, 1});
+    BOOST_REQUIRE(boundary.faceFromSlot(1) != nullptr);
+    BOOST_REQUIRE(boundary.faceFromSlot(2) != nullptr);
+    BOOST_CHECK_EQUAL(boundary.faceFromSlot(1)->interiorActiveCell, 0);
+    BOOST_CHECK_EQUAL(boundary.faceFromSlot(2)->interiorActiveCell, 1);
+    BOOST_CHECK(boundary.faceFromSlot(0) == nullptr);
+    BOOST_CHECK(boundary.faceFromSlot(3) == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(SelectsReportStepByEpisodeThenFallback)
+{
+    Opm::EclIO::FluxFile::Data data;
+    const auto mkStep = [](const int reportStep, const int simStep)
+    {
+        Opm::EclIO::FluxFile::ReportStep step;
+        step.reportStep = reportStep;
+        step.simStep = simStep;
+        step.startTime = 0.0;
+        step.stepLength = 0.1;
+        return step;
+    };
+    data.reportSteps = {
+        mkStep(2, 20),
+        mkStep(4, 40),
+        mkStep(8, 80),
+    };
+
+    const auto* exact = Opm::FluxBoundary::selectReportStep(data, 4);
+    BOOST_REQUIRE(exact != nullptr);
+    BOOST_CHECK_EQUAL(exact->reportStep, 4);
+
+    const auto* oneBased = Opm::FluxBoundary::selectReportStep(data, 1);
+    BOOST_REQUIRE(oneBased != nullptr);
+    BOOST_CHECK_EQUAL(oneBased->reportStep, 2);
+
+    const auto* clamped = Opm::FluxBoundary::selectReportStep(data, 99);
+    BOOST_REQUIRE(clamped != nullptr);
+    BOOST_CHECK_EQUAL(clamped->reportStep, 8);
+
+    Opm::EclIO::FluxFile::Data empty;
+    BOOST_CHECK(Opm::FluxBoundary::selectReportStep(empty, 0) == nullptr);
+}
