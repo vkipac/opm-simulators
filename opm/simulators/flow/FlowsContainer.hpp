@@ -165,6 +165,11 @@ public:
                    const int comp_idx) const
     { return flows_[comp_idx][FaceDir::ToIntersectionIndex(dir)][globalDofIdx]; }
 
+    Scalar getFlores(const unsigned globalDofIdx,
+                     const FaceDir::DirEnum dir,
+                     const int comp_idx) const
+    { return flores_[comp_idx][FaceDir::ToIntersectionIndex(dir)][globalDofIdx]; }
+
 private:
     bool anyFlows_{false};
     bool anyFlores_{false};

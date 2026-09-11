@@ -69,6 +69,7 @@ FluxDumper::FluxDumper(std::string parentCaseName,
     };
 
     this->data_.localToGlobal = region.localToGlobal;
+    this->regionBoundaryFaces_ = region.boundaryFaces;
     this->data_.boundaryFaces.reserve(region.boundaryFaces.size());
 
     for (std::size_t i = 0; i < region.boundaryFaces.size(); ++i) {
@@ -134,6 +135,32 @@ std::vector<double> FluxDumper::aggregateRates(
         const auto weight = timeWeights[t] / totalWeight;
         for (std::size_t i = 0; i < expectedSize; ++i) {
             out[i] += rateSnapshots[t][i] * weight;
+        }
+    }
+
+    return out;
+}
+
+std::vector<double> FluxDumper::makeFaceMajorRates(const FaceFluxAccessor& getFaceFlux) const
+{
+    if (!hasFluxMode(this->data_.header.mode)) {
+        return {};
+    }
+
+    const std::array phases{
+        EclIO::FluxFile::Phase::Oil,
+        EclIO::FluxFile::Phase::Water,
+        EclIO::FluxFile::Phase::Gas,
+    };
+
+    std::vector<double> out;
+    out.reserve(this->expectedRateSize());
+
+    for (const auto& face : this->regionBoundaryFaces_) {
+        for (const auto phase : phases) {
+            if (this->data_.header.hasPhase(phase)) {
+                out.push_back(getFaceFlux(face, phase));
+            }
         }
     }
 

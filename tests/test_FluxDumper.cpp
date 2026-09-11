@@ -225,3 +225,33 @@ BOOST_AUTO_TEST_CASE(BuildsZeroFluxStepWithExpectedSizes)
   BOOST_CHECK_EQUAL(step.rs.size(), 2U);
   BOOST_CHECK_EQUAL(step.rv.size(), 2U);
 }
+
+BOOST_AUTO_TEST_CASE(FlattensFaceMajorRatesInCanonicalPhaseOrder)
+{
+  const std::array<int, 3> dims{4, 1, 1};
+  std::vector<int> regionValues(dims[0] * dims[1] * dims[2], 0);
+  regionValues[globalIndex(dims, 2, 1, 1)] = 6;
+  regionValues[globalIndex(dims, 3, 1, 1)] = 6;
+
+  const auto regions = Opm::FluxRegions::extract(dims, regionValues);
+  BOOST_REQUIRE_EQUAL(regions.size(), 1U);
+
+  Opm::FluxDumper dumper("PARENT", 6, dims, regions.front(),
+               Opm::EclIO::FluxFile::Mode::Flux,
+               Opm::EclIO::FluxFile::Sampling::Instant,
+               static_cast<int>(Opm::EclIO::FluxFile::Phase::Oil)
+               | static_cast<int>(Opm::EclIO::FluxFile::Phase::Gas));
+
+  const auto rates = dumper.makeFaceMajorRates(
+    [](const Opm::FluxRegions::BoundaryFace& face, const Opm::EclIO::FluxFile::Phase phase)
+    {
+      const int phaseCode = (phase == Opm::EclIO::FluxFile::Phase::Oil) ? 10 : 30;
+      return static_cast<double>(face.interiorGlobalCell * 100 + phaseCode);
+    });
+
+  BOOST_REQUIRE_EQUAL(rates.size(), 4U);
+  BOOST_CHECK_CLOSE(rates[0], globalIndex(dims, 2, 1, 1) * 100.0 + 10.0, 1e-12);
+  BOOST_CHECK_CLOSE(rates[1], globalIndex(dims, 2, 1, 1) * 100.0 + 30.0, 1e-12);
+  BOOST_CHECK_CLOSE(rates[2], globalIndex(dims, 3, 1, 1) * 100.0 + 10.0, 1e-12);
+  BOOST_CHECK_CLOSE(rates[3], globalIndex(dims, 3, 1, 1) * 100.0 + 30.0, 1e-12);
+}

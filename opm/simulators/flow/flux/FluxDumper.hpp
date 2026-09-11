@@ -24,6 +24,7 @@
 #include <opm/simulators/flow/flux/FluxRegions.hpp>
 
 #include <array>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -64,6 +65,9 @@ public:
         const std::vector<std::vector<double>>& rateSnapshots,
         const std::vector<double>& timeWeights);
 
+    using FaceFluxAccessor = std::function<double(const FluxRegions::BoundaryFace&, EclIO::FluxFile::Phase)>;
+    std::vector<double> makeFaceMajorRates(const FaceFluxAccessor& getFaceFlux) const;
+
     ReportStepData makeZeroFluxStep(int reportStep,
                                     int simStep,
                                     double startTime,
@@ -82,6 +86,8 @@ private:
     std::size_t numBoundaryFaces() const;
     std::size_t expectedRateSize() const;
     void validateStepData(const ReportStepData& stepData) const;
+
+    std::vector<FluxRegions::BoundaryFace> regionBoundaryFaces_;
 
     EclIO::FluxFile::Data data_;
 };

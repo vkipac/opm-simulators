@@ -992,6 +992,20 @@ private:
         return mask;
     }
 
+    int fluxComponentIndex_(const EclIO::FluxFile::Phase phase) const
+    {
+        switch (phase) {
+        case EclIO::FluxFile::Phase::Oil:
+            return FluidSystem::oilCompIdx;
+        case EclIO::FluxFile::Phase::Water:
+            return FluidSystem::waterCompIdx;
+        case EclIO::FluxFile::Phase::Gas:
+            return FluidSystem::gasCompIdx;
+        }
+
+        return FluidSystem::oilCompIdx;
+    }
+
     void initializeFluxDumpers_()
     {
         if (!this->collectOnIORank_.isIORank()) {
@@ -1061,16 +1075,34 @@ private:
             return;
         }
 
+        const auto& flows = this->outputModule_->getFlows();
         const auto simStep = simulator_.timeStepIndex();
         const auto startTime = simulator_.time();
         const auto stepLength = simulator_.timeStepSize();
 
         for (auto& dumper : this->fluxDumpers_) {
-            dumper.appendReportStep(
-                dumper.makeZeroFluxStep(reportStepNum,
-                                        simStep,
-                                        startTime,
-                                        stepLength));
+            auto step = dumper.makeZeroFluxStep(reportStepNum,
+                                                simStep,
+                                                startTime,
+                                                stepLength);
+
+            if (flows.hasFlores()) {
+                // flows.getFlores is oriented by the interior-cell face direction.
+                // FLUX file convention is positive into the sector, i.e. opposite sign.
+                step.rates = dumper.makeFaceMajorRates(
+                    [&flows, this](const FluxRegions::BoundaryFace& face,
+                                   const EclIO::FluxFile::Phase phase)
+                    {
+                        if (face.isNnc || face.direction == FaceDir::Unknown) {
+                            return 0.0;
+                        }
+
+                        const auto comp = this->fluxComponentIndex_(phase);
+                        return -flows.getFlores(face.interiorGlobalCell, face.direction, comp);
+                    });
+            }
+
+            dumper.appendReportStep(step);
         }
     }
 
