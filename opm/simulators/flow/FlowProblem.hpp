@@ -74,6 +74,7 @@
 #include <opm/utility/CopyablePtr.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cmath>
 #include <filesystem>
@@ -1834,11 +1835,39 @@ protected:
         const auto inputDir = std::filesystem::path{ioConfig.getInputDir()};
         const auto baseName = ioConfig.getBaseName();
         const auto fluxPath = inputDir / (baseName + ".FLUX");
-        const auto fluxPath0001 = inputDir / (baseName + ".FLUX0001");
 
         std::filesystem::path selectedFluxPath = fluxPath;
-        if (!std::filesystem::exists(selectedFluxPath) && std::filesystem::exists(fluxPath0001)) {
-            selectedFluxPath = fluxPath0001;
+        if (!std::filesystem::exists(selectedFluxPath)) {
+            const auto prefix = baseName + ".FLUX";
+            std::vector<std::filesystem::path> suffixCandidates;
+            if (std::filesystem::exists(inputDir)) {
+                for (const auto& entry : std::filesystem::directory_iterator(inputDir)) {
+                    if (!entry.is_regular_file()) {
+                        continue;
+                    }
+
+                    const auto filename = entry.path().filename().string();
+                    if (filename.rfind(prefix, 0) != 0) {
+                        continue;
+                    }
+
+                    const auto suffix = filename.substr(prefix.size());
+                    if (suffix.size() != 4
+                        || !std::all_of(suffix.begin(), suffix.end(), [](const char c)
+                                        {
+                                            return std::isdigit(static_cast<unsigned char>(c)) != 0;
+                                        })) {
+                        continue;
+                    }
+
+                    suffixCandidates.push_back(entry.path());
+                }
+            }
+
+            if (!suffixCandidates.empty()) {
+                std::sort(suffixCandidates.begin(), suffixCandidates.end());
+                selectedFluxPath = suffixCandidates.front();
+            }
         }
 
         const auto fluxData = EclIO::FluxFile::read(selectedFluxPath.string());
