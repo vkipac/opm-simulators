@@ -54,10 +54,12 @@ constexpr double secondsPerDay = 24.0 * 60.0 * 60.0;
 struct Options {
     std::string parent;
     std::string mapping;
+    std::string mappingInline;
     std::string output;
     std::string mode = "flux";
     std::string sampling = "averaged";
     std::string summary;
+    bool noSummary = false;
     bool help = false;
 };
 
@@ -80,17 +82,24 @@ using NncKey = std::pair<int, int>;
 void printUsage()
 {
     std::cout
-        << "usage: make_flux --parent=<CASE|CASE.DATA> --mapping=<file> --output=<SECTOR.FLUX> [options]\n"
+    << "usage: make_flux --parent=<CASE|CASE.DATA> (--mapping=<file>|--mapping-inline=<spec>) --output=<SECTOR.FLUX> [options]\n"
         << "\n"
         << "options:\n"
         << "  --mode=<flux|pressure|both>         Boundary payload mode (default: flux; flux requires FLORES restart arrays)\n"
         << "  --sampling=<averaged|instant>        Flux sampling mode (default: averaged)\n"
         << "  --summary=<CASE|CASE.SMSPEC>         Optional parent summary override\n"
+        << "  --no-summary                         Ignore SMSPEC/FSMSPEC summary data even if present\n"
         << "\n"
-        << "mapping file:\n"
-        << "  One selected parent cell per non-comment line, either as:\n"
-        << "    <global-cartesian-index>           zero-based parent global cartesian index\n"
-        << "    <i> <j> <k>                        one-based parent cartesian coordinates\n"
+    << "mapping directives (file or --mapping-inline):\n"
+    << "  Legacy line forms:\n"
+    << "    <global-cartesian-index>           zero-based parent global cartesian index\n"
+    << "    <i> <j> <k>                        one-based parent cartesian coordinates\n"
+    << "  Extended forms:\n"
+    << "    global <index>                     select one zero-based global index\n"
+    << "    ijk <i> <j> <k>                    select one one-based cartesian cell\n"
+    << "    global_range <begin> <end>         select inclusive zero-based global range\n"
+    << "    box <i1> <j1> <k1> <i2> <j2> <k2> select inclusive one-based cartesian box\n"
+    << "  Comments use '#'. For --mapping-inline, separate directives with ';'\n"
         << "  --help                               Show this message\n";
 }
 
@@ -124,6 +133,9 @@ Options parseOptions(int argc, char** argv)
         else if (startsWith(arg, "--mapping=")) {
             opt.mapping = valueAfterEquals(arg);
         }
+        else if (startsWith(arg, "--mapping-inline=")) {
+            opt.mappingInline = valueAfterEquals(arg);
+        }
         else if (startsWith(arg, "--output=")) {
             opt.output = valueAfterEquals(arg);
         }
@@ -135,6 +147,9 @@ Options parseOptions(int argc, char** argv)
         }
         else if (startsWith(arg, "--summary=")) {
             opt.summary = valueAfterEquals(arg);
+        }
+        else if (arg == "--no-summary") {
+            opt.noSummary = true;
         }
         else {
             throw std::invalid_argument("unrecognized argument '" + arg + "'");
@@ -256,7 +271,7 @@ ParentInput resolveParentInput(const Options& opt)
             input.summaryPath = summaryRoot;
         }
     }
-    else {
+    else if (!opt.noSummary) {
         fs::path summaryPath = input.rootPath;
         summaryPath += ".SMSPEC";
         if (fs::exists(summaryPath)) {
@@ -341,6 +356,181 @@ bool hasPressureMode(const Opm::EclIO::FluxFile::Mode mode)
     return (static_cast<int>(mode) & static_cast<int>(Opm::EclIO::FluxFile::Mode::Pressure)) != 0;
 }
 
+std::vector<int> parseMappingLines(const std::vector<std::string>& lines,
+                                   const std::array<int, 3>& dims,
+                                   const std::string& source)
+{
+    const int cellCount = dims[0] * dims[1] * dims[2];
+    std::vector<int> regionValues(cellCount, 0);
+
+    const auto selectGlobalCell = [&](const int globalCell, const std::string& location) {
+        if (globalCell < 0 || globalCell >= cellCount) {
+            throw std::invalid_argument(location
+                                        + " refers to out-of-range global cell index "
+                                        + std::to_string(globalCell));
+        }
+
+        regionValues[globalCell] = 1;
+    };
+
+    const auto parseInt = [](const std::string& token, const std::string& location) {
+        try {
+            std::size_t consumed = 0;
+            const int value = std::stoi(token, &consumed);
+            if (consumed != token.size()) {
+                throw std::invalid_argument("");
+            }
+            return value;
+        }
+        catch (const std::exception&) {
+            throw std::invalid_argument(location + " contains non-integer token '" + token + "'");
+        }
+    };
+
+    int lineNumber = 0;
+    for (const auto& rawLine : lines) {
+        ++lineNumber;
+        auto line = rawLine;
+        const auto commentPos = line.find('#');
+        if (commentPos != std::string::npos) {
+            line.erase(commentPos);
+        }
+
+        for (char& c : line) {
+            if (c == ',') {
+                c = ' ';
+            }
+        }
+
+        std::istringstream iss(line);
+        std::vector<std::string> tokens;
+        std::string token;
+        while (iss >> token) {
+            tokens.push_back(token);
+        }
+
+        if (tokens.empty()) {
+            continue;
+        }
+
+        std::vector<std::string> lowerTokens = tokens;
+        for (auto& item : lowerTokens) {
+            std::transform(item.begin(), item.end(), item.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+        }
+
+        const std::string location = source + ":" + std::to_string(lineNumber);
+
+        if (lowerTokens[0] == "global") {
+            if (tokens.size() != 2U) {
+                throw std::invalid_argument(location + " expected 'global <index>'");
+            }
+
+            selectGlobalCell(parseInt(tokens[1], location), location);
+            continue;
+        }
+
+        if (lowerTokens[0] == "ijk") {
+            if (tokens.size() != 4U) {
+                throw std::invalid_argument(location + " expected 'ijk <i> <j> <k>'");
+            }
+
+            const int i = parseInt(tokens[1], location) - 1;
+            const int j = parseInt(tokens[2], location) - 1;
+            const int k = parseInt(tokens[3], location) - 1;
+            if (i < 0 || i >= dims[0] || j < 0 || j >= dims[1] || k < 0 || k >= dims[2]) {
+                throw std::invalid_argument(location + " has out-of-range i/j/k coordinates");
+            }
+
+            selectGlobalCell(Opm::FluxRegions::cartesianIndex(dims, i, j, k), location);
+            continue;
+        }
+
+        if (lowerTokens[0] == "global_range") {
+            if (tokens.size() != 3U) {
+                throw std::invalid_argument(location + " expected 'global_range <begin> <end>'");
+            }
+
+            const int begin = parseInt(tokens[1], location);
+            const int end = parseInt(tokens[2], location);
+            if (end < begin) {
+                throw std::invalid_argument(location + " has descending global_range bounds");
+            }
+
+            for (int index = begin; index <= end; ++index) {
+                selectGlobalCell(index, location);
+            }
+            continue;
+        }
+
+        if (lowerTokens[0] == "box") {
+            if (tokens.size() != 7U) {
+                throw std::invalid_argument(location + " expected 'box <i1> <j1> <k1> <i2> <j2> <k2>'");
+            }
+
+            const int i1 = parseInt(tokens[1], location);
+            const int j1 = parseInt(tokens[2], location);
+            const int k1 = parseInt(tokens[3], location);
+            const int i2 = parseInt(tokens[4], location);
+            const int j2 = parseInt(tokens[5], location);
+            const int k2 = parseInt(tokens[6], location);
+
+            const int iMin = std::min(i1, i2);
+            const int iMax = std::max(i1, i2);
+            const int jMin = std::min(j1, j2);
+            const int jMax = std::max(j1, j2);
+            const int kMin = std::min(k1, k2);
+            const int kMax = std::max(k1, k2);
+
+            if (iMin < 1 || iMax > dims[0] || jMin < 1 || jMax > dims[1] || kMin < 1 || kMax > dims[2]) {
+                throw std::invalid_argument(location + " has out-of-range box coordinates");
+            }
+
+            for (int k = kMin; k <= kMax; ++k) {
+                for (int j = jMin; j <= jMax; ++j) {
+                    for (int i = iMin; i <= iMax; ++i) {
+                        selectGlobalCell(Opm::FluxRegions::cartesianIndex(dims, i - 1, j - 1, k - 1), location);
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Backward-compatible legacy syntax: either one global index or i j k triplet.
+        std::vector<int> legacyValues;
+        legacyValues.reserve(tokens.size());
+        for (const auto& item : tokens) {
+            legacyValues.push_back(parseInt(item, location));
+        }
+
+        int globalCell = -1;
+        if (legacyValues.size() == 1U) {
+            globalCell = legacyValues[0];
+        }
+        else if (legacyValues.size() == 3U) {
+            const int i = legacyValues[0] - 1;
+            const int j = legacyValues[1] - 1;
+            const int k = legacyValues[2] - 1;
+            if (i < 0 || i >= dims[0] || j < 0 || j >= dims[1] || k < 0 || k >= dims[2]) {
+                throw std::invalid_argument(location + " has out-of-range i/j/k coordinates");
+            }
+            globalCell = Opm::FluxRegions::cartesianIndex(dims, i, j, k);
+        }
+        else {
+            throw std::invalid_argument(location + " must contain either 1 or 3 integers, or a supported directive");
+        }
+
+        selectGlobalCell(globalCell, location);
+    }
+
+    if (std::find(regionValues.begin(), regionValues.end(), 1) == regionValues.end()) {
+        throw std::invalid_argument(source + " did not select any cells");
+    }
+
+    return regionValues;
+}
+
 std::vector<int> parseMappingFile(const fs::path& mappingPath,
                                   const std::array<int, 3>& dims)
 {
@@ -349,62 +539,30 @@ std::vector<int> parseMappingFile(const fs::path& mappingPath,
         throw std::invalid_argument("failed to open mapping file '" + mappingPath.string() + "'");
     }
 
-    const int cellCount = dims[0] * dims[1] * dims[2];
-    std::vector<int> regionValues(cellCount, 0);
+    std::vector<std::string> lines;
     std::string line;
-    int lineNumber = 0;
-
     while (std::getline(input, line)) {
-        ++lineNumber;
-        const auto commentPos = line.find('#');
-        if (commentPos != std::string::npos) {
-            line.erase(commentPos);
-        }
-
-        std::istringstream iss(line);
-        std::vector<int> tokens;
-        int value = 0;
-        while (iss >> value) {
-            tokens.push_back(value);
-        }
-
-        if (tokens.empty()) {
-            continue;
-        }
-
-        int globalCell = -1;
-        if (tokens.size() == 1U) {
-            globalCell = tokens[0];
-        }
-        else if (tokens.size() == 3U) {
-            const int i = tokens[0] - 1;
-            const int j = tokens[1] - 1;
-            const int k = tokens[2] - 1;
-            if (i < 0 || i >= dims[0] || j < 0 || j >= dims[1] || k < 0 || k >= dims[2]) {
-                throw std::invalid_argument("mapping line " + std::to_string(lineNumber)
-                                            + " has out-of-range i/j/k coordinates");
-            }
-            globalCell = Opm::FluxRegions::cartesianIndex(dims, i, j, k);
-        }
-        else {
-            throw std::invalid_argument("mapping line " + std::to_string(lineNumber)
-                                        + " must contain either 1 or 3 integers");
-        }
-
-        if (globalCell < 0 || globalCell >= cellCount) {
-            throw std::invalid_argument("mapping line " + std::to_string(lineNumber)
-                                        + " refers to out-of-range global cell index "
-                                        + std::to_string(globalCell));
-        }
-
-        regionValues[globalCell] = 1;
+        lines.push_back(line);
     }
 
-    if (std::find(regionValues.begin(), regionValues.end(), 1) == regionValues.end()) {
-        throw std::invalid_argument("mapping file did not select any cells");
+    return parseMappingLines(lines, dims, mappingPath.string());
+}
+
+std::vector<int> parseMappingSpecification(const Options& opt,
+                                           const std::array<int, 3>& dims)
+{
+    if (!opt.mapping.empty()) {
+        return parseMappingFile(opt.mapping, dims);
     }
 
-    return regionValues;
+    std::vector<std::string> lines;
+    std::string segment;
+    std::istringstream inlineStream(opt.mappingInline);
+    while (std::getline(inlineStream, segment, ';')) {
+        lines.push_back(segment);
+    }
+
+    return parseMappingLines(lines, dims, "--mapping-inline");
 }
 
 std::vector<double> loadNumericArray(Opm::EclIO::EclFile& file, const std::string& keyword)
@@ -761,8 +919,16 @@ int run(const Options& opt)
     if (opt.parent.empty()) {
         throw std::invalid_argument("missing required argument --parent=<CASE|CASE.DATA>");
     }
-    if (opt.mapping.empty()) {
-        throw std::invalid_argument("missing required argument --mapping=<file>");
+    const bool hasMappingFile = !opt.mapping.empty();
+    const bool hasInlineMapping = !opt.mappingInline.empty();
+    if (!hasMappingFile && !hasInlineMapping) {
+        throw std::invalid_argument("missing required mapping argument (--mapping=<file> or --mapping-inline=<spec>)");
+    }
+    if (hasMappingFile && hasInlineMapping) {
+        throw std::invalid_argument("mapping is ambiguous; pass either --mapping=<file> or --mapping-inline=<spec>, not both");
+    }
+    if (opt.noSummary && !opt.summary.empty()) {
+        throw std::invalid_argument("summary options are ambiguous; pass either --summary=... or --no-summary");
     }
     if (opt.output.empty()) {
         throw std::invalid_argument("missing required argument --output=<SECTOR.FLUX>");
@@ -782,7 +948,7 @@ int run(const Options& opt)
     const auto fluxMode = modeFromString(opt.mode);
     const auto dims = gridDims(state);
     const auto& unitSystem = state.getDeckUnitSystem();
-    const auto regionValues = parseMappingFile(opt.mapping, dims);
+    const auto regionValues = parseMappingSpecification(opt, dims);
     const auto regions = Opm::FluxRegions::extract(dims, regionValues);
     if (regions.size() != 1U) {
         throw std::invalid_argument("mapping must define exactly one connected region");

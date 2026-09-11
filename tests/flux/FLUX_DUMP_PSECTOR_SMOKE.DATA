@@ -1,4 +1,4 @@
--- Pressure-mode smoke test for DUMPFLUX output generation.
+-- Larger sector-style pressure regression for make_flux equivalence.
 
 RUNSPEC
 
@@ -11,7 +11,7 @@ METRIC
 UNIFOUT
 
 DIMENS
-  10 1 10 /
+  30 20 5 /
 
 TABDIMS
   1 1 40 20 1 20 /
@@ -19,23 +19,27 @@ TABDIMS
 GRID
 
 DX
-  100*1 /
+  3000*1 /
 DY
-  100*1 /
+  3000*1 /
 DZ
-  100*1 /
+  3000*1 /
 
 TOPS
-  10*0. /
+  600*0. /
 
 PORO
-  100*0.3 /
+  3000*0.3 /
 
 PERMX
-  100*500 /
+  3000*500 /
 
 FLUXREG
-  10*0 1 89*0 /
+  3000*0 /
+
+EQUALS
+  FLUXREG 1 8 22 8 13 3 3 /
+/
 
 FLUXTYPE
   PRESSURE /
@@ -118,17 +122,20 @@ PVTO
 SOLUTION
 
 SWAT
-  100*0.0 /
+  3000*0.0 /
 
 SGAS
-  100*0.0 /
+  3000*0.0 /
 
 PRESSURE
-  100*300.0 /
+  3000*300.0 /
 
 SCHEDULE
 
+RPTRST
+  'BASIC=2' /
+
 TSTEP
-  1 /
+  1 1 /
 
 END

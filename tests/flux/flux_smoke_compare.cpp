@@ -54,7 +54,9 @@ bool compareVector(const std::vector<double>& lhs,
 bool compareStep(const Opm::EclIO::FluxFile::ReportStep& lhs,
                  const Opm::EclIO::FluxFile::ReportStep& rhs,
                  const std::size_t stepIdx,
-                 const bool compareSummary)
+                 const bool compareSummary,
+                 const bool ignorePressures,
+                 const bool ignoreTimes)
 {
     if (lhs.reportStep != rhs.reportStep || lhs.simStep != rhs.simStep) {
         std::cerr << "step meta mismatch at step " << stepIdx
@@ -62,15 +64,25 @@ bool compareStep(const Opm::EclIO::FluxFile::ReportStep& lhs,
                   << ", simStep " << lhs.simStep << " vs " << rhs.simStep << '\n';
         return false;
     }
-    if (!closeEnough(lhs.startTime, rhs.startTime, 1e-10) || !closeEnough(lhs.stepLength, rhs.stepLength, 1e-10)) {
+    if (!ignoreTimes
+        && (!closeEnough(lhs.startTime, rhs.startTime, 1e-10)
+            || !closeEnough(lhs.stepLength, rhs.stepLength, 1e-10))) {
         std::cerr << "step time mismatch at step " << stepIdx
                   << ": startTime " << lhs.startTime << " vs " << rhs.startTime
                   << ", stepLength " << lhs.stepLength << " vs " << rhs.stepLength << '\n';
         return false;
     }
 
+    const bool pressureMatch = ignorePressures
+        ? lhs.pressures.size() == rhs.pressures.size()
+        : compareVector(lhs.pressures, rhs.pressures, "pressures", 1e-2);
+    if (ignorePressures && !pressureMatch) {
+        std::cerr << "pressures size mismatch: " << lhs.pressures.size() << " vs " << rhs.pressures.size() << '\n';
+        return false;
+    }
+
     const bool basicMatch = compareVector(lhs.rates, rhs.rates, "rates", 1e-10)
-        && compareVector(lhs.pressures, rhs.pressures, "pressures", 1e-2)
+        && pressureMatch
         && compareVector(lhs.swat, rhs.swat, "swat", 1e-10)
         && compareVector(lhs.sgas, rhs.sgas, "sgas", 1e-10)
         && compareVector(lhs.rs, rhs.rs, "rs", 1e-4)
@@ -88,8 +100,24 @@ bool compareStep(const Opm::EclIO::FluxFile::ReportStep& lhs,
 
 int main(int argc, char** argv)
 {
-    if (argc != 3) {
-        return fail("usage: flux_smoke_compare <expected.FLUX> <actual.FLUX>");
+    bool ignorePressures = false;
+    bool ignoreTimes = false;
+    for (int i = 3; i < argc; ++i) {
+        const std::string arg{argv[i]};
+        if (arg == "--ignore-pressures") {
+            ignorePressures = true;
+            continue;
+        }
+        if (arg == "--ignore-times") {
+            ignoreTimes = true;
+            continue;
+        }
+
+        return fail("usage: flux_smoke_compare <expected.FLUX> <actual.FLUX> [--ignore-pressures] [--ignore-times]");
+    }
+
+    if (argc < 3) {
+        return fail("usage: flux_smoke_compare <expected.FLUX> <actual.FLUX> [--ignore-pressures] [--ignore-times]");
     }
 
     const auto expected = Opm::EclIO::FluxFile::read(argv[1]);
@@ -186,7 +214,12 @@ int main(int argc, char** argv)
             continue;
         }
 
-        if (!compareStep(expected.reportSteps[i], actual.reportSteps[i - expectedStepOffset], i - expectedStepOffset, compareSummary)) {
+        if (!compareStep(expected.reportSteps[i],
+                         actual.reportSteps[i - expectedStepOffset],
+                         i - expectedStepOffset,
+                         compareSummary,
+                         ignorePressures,
+                         ignoreTimes)) {
             return fail("report step payload mismatch at index " + std::to_string(i));
         }
     }
