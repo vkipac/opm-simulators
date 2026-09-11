@@ -22,6 +22,8 @@
 #include <opm/common/ErrorMacros.hpp>
 
 #include <algorithm>
+#include <cctype>
+#include <filesystem>
 #include <stdexcept>
 
 namespace Opm {
@@ -89,6 +91,48 @@ FluxBoundary FluxBoundary::load(const std::string& filename,
                                 const std::vector<int>& localToActive)
 {
     return fromData(EclIO::FluxFile::read(filename), localToActive);
+}
+
+std::filesystem::path FluxBoundary::selectInputPath(const std::filesystem::path& inputDir,
+                                                    const std::string& baseName)
+{
+    const auto fluxPath = inputDir / (baseName + ".FLUX");
+    if (std::filesystem::exists(fluxPath)) {
+        return fluxPath;
+    }
+
+    const auto prefix = baseName + ".FLUX";
+    std::vector<std::filesystem::path> suffixCandidates;
+    if (std::filesystem::exists(inputDir)) {
+        for (const auto& entry : std::filesystem::directory_iterator(inputDir)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+
+            const auto filename = entry.path().filename().string();
+            if (filename.rfind(prefix, 0) != 0) {
+                continue;
+            }
+
+            const auto suffix = filename.substr(prefix.size());
+            if (suffix.size() != 4
+                || !std::all_of(suffix.begin(), suffix.end(), [](const char c)
+                                {
+                                    return std::isdigit(static_cast<unsigned char>(c)) != 0;
+                                })) {
+                continue;
+            }
+
+            suffixCandidates.push_back(entry.path());
+        }
+    }
+
+    if (!suffixCandidates.empty()) {
+        std::sort(suffixCandidates.begin(), suffixCandidates.end());
+        return suffixCandidates.front();
+    }
+
+    return fluxPath;
 }
 
 const EclIO::FluxFile::ReportStep* FluxBoundary::selectReportStep(const EclIO::FluxFile::Data& data,

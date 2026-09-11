@@ -26,6 +26,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -53,6 +54,9 @@ public:
 
     static FluxBoundary load(const std::string& filename,
                              const std::vector<int>& localToActive);
+
+    static std::filesystem::path selectInputPath(const std::filesystem::path& inputDir,
+                                                 const std::string& baseName);
 
     static const EclIO::FluxFile::ReportStep* selectReportStep(const EclIO::FluxFile::Data& data,
                                                                 int episodeIndex);

@@ -30,6 +30,7 @@
 
 #include <array>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <stdexcept>
 #include <tuple>
@@ -290,4 +291,48 @@ BOOST_AUTO_TEST_CASE(AppliesTransmissibilityOverridesWithFiltering)
     BOOST_CHECK_EQUAL(std::get<1>(transmissibility.calls[1]),
                       static_cast<unsigned>(Opm::FaceDir::ToIntersectionIndex(Opm::FaceDir::XPlus)));
     BOOST_CHECK_CLOSE(std::get<2>(transmissibility.calls[1]), 7.25, 1e-12);
+}
+
+BOOST_AUTO_TEST_CASE(SelectInputPathPrefersExactFluxFile)
+{
+    const auto dir = std::filesystem::path{"test_fluxboundary_input_select_exact"};
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+
+    const std::string base = "CASE";
+    const auto exact = dir / "CASE.FLUX";
+    const auto s2 = dir / "CASE.FLUX0002";
+    const auto s7 = dir / "CASE.FLUX0007";
+
+    std::ofstream(exact.string()).put('\n');
+    std::ofstream(s2.string()).put('\n');
+    std::ofstream(s7.string()).put('\n');
+
+    const auto selected = Opm::FluxBoundary::selectInputPath(dir, base);
+    BOOST_CHECK_EQUAL(selected, exact);
+
+    std::filesystem::remove_all(dir);
+}
+
+BOOST_AUTO_TEST_CASE(SelectInputPathChoosesLowestNumericSuffix)
+{
+    const auto dir = std::filesystem::path{"test_fluxboundary_input_select_suffix"};
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+
+    const std::string base = "CASE";
+    const auto s2 = dir / "CASE.FLUX0002";
+    const auto s7 = dir / "CASE.FLUX0007";
+    const auto badAlpha = dir / "CASE.FLUXABCD";
+    const auto badLen = dir / "CASE.FLUX00021";
+
+    std::ofstream(s7.string()).put('\n');
+    std::ofstream(s2.string()).put('\n');
+    std::ofstream(badAlpha.string()).put('\n');
+    std::ofstream(badLen.string()).put('\n');
+
+    const auto selected = Opm::FluxBoundary::selectInputPath(dir, base);
+    BOOST_CHECK_EQUAL(selected, s2);
+
+    std::filesystem::remove_all(dir);
 }
