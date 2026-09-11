@@ -24,6 +24,8 @@
 #include <opm/io/eclipse/FluxFile.hpp>
 
 #include <array>
+#include <cmath>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -57,6 +59,31 @@ public:
 
     std::array<std::vector<int>, 6> buildDirectionalFaceIndices(std::size_t numActiveCells) const;
     const Face* faceFromSlot(int slot) const;
+
+    template <class TransmissibilityLike>
+    std::size_t applyTransmissibilityOverrides(TransmissibilityLike& transmissibility) const
+    {
+        std::size_t appliedCount = 0;
+        for (const auto& face : this->faces_) {
+            if (face.isNnc || face.direction == FaceDir::Unknown) {
+                continue;
+            }
+            if (face.interiorActiveCell < 0) {
+                continue;
+            }
+            if (!std::isfinite(face.transmissibility) || face.transmissibility <= 0.0) {
+                continue;
+            }
+
+            const auto boundaryFaceIdx = static_cast<unsigned>(FaceDir::ToIntersectionIndex(face.direction));
+            transmissibility.setTransmissibilityBoundary(static_cast<unsigned>(face.interiorActiveCell),
+                                                         boundaryFaceIdx,
+                                                         face.transmissibility);
+            ++appliedCount;
+        }
+
+        return appliedCount;
+    }
 
     const EclIO::FluxFile::Data& data() const;
     const std::vector<Face>& faces() const;

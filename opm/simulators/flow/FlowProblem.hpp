@@ -1862,22 +1862,7 @@ protected:
             return;
         }
 
-        for (const auto& face : this->fluxBoundary_->faces()) {
-            if (face.isNnc || face.direction == FaceDir::Unknown) {
-                continue;
-            }
-            if (face.interiorActiveCell < 0) {
-                continue;
-            }
-            if (!std::isfinite(face.transmissibility) || face.transmissibility <= 0.0) {
-                continue;
-            }
-
-            const auto boundaryFaceIdx = static_cast<unsigned>(FaceDir::ToIntersectionIndex(face.direction));
-            transmissibilities_.setTransmissibilityBoundary(static_cast<unsigned>(face.interiorActiveCell),
-                                                            boundaryFaceIdx,
-                                                            static_cast<Scalar>(face.transmissibility));
-        }
+        this->fluxBoundary_->applyTransmissibilityOverrides(transmissibilities_);
     }
 
     // this method applies the runtime constraints specified via the deck and/or command

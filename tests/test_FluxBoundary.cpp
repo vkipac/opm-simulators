@@ -30,7 +30,9 @@
 
 #include <array>
 #include <filesystem>
+#include <limits>
 #include <stdexcept>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -246,4 +248,46 @@ BOOST_AUTO_TEST_CASE(SelectsReportStepByEpisodeThenFallback)
 
     Opm::EclIO::FluxFile::Data empty;
     BOOST_CHECK(Opm::FluxBoundary::selectReportStep(empty, 0) == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(AppliesTransmissibilityOverridesWithFiltering)
+{
+    struct DummyTransmissibility {
+        std::vector<std::tuple<unsigned, unsigned, double>> calls;
+
+        void setTransmissibilityBoundary(const unsigned elemIdx,
+                                         const unsigned boundaryFaceIdx,
+                                         const double value)
+        {
+            this->calls.emplace_back(elemIdx, boundaryFaceIdx, value);
+        }
+    };
+
+    Opm::EclIO::FluxFile::Data data;
+    data.localToGlobal = {10, 11, 12, 13, 14, 15};
+    data.boundaryFaces = {
+        {0, static_cast<int>(Opm::FaceDir::XMinus), 9, 4.5},
+        {1, static_cast<int>(Opm::FaceDir::XPlus), 12, 7.25},
+        {2, static_cast<int>(Opm::FaceDir::Unknown), 99, 3.0},
+        {3, static_cast<int>(Opm::FaceDir::YMinus), 8, 0.0},
+        {4, static_cast<int>(Opm::FaceDir::YPlus), 7, -2.0},
+        {5, static_cast<int>(Opm::FaceDir::ZMinus), 6, std::numeric_limits<double>::quiet_NaN()},
+    };
+
+    const auto boundary = Opm::FluxBoundary::fromData(data, {0, 1, 2, 3, 4, 5});
+    DummyTransmissibility transmissibility;
+    const auto applied = boundary.applyTransmissibilityOverrides(transmissibility);
+
+    BOOST_CHECK_EQUAL(applied, 2U);
+    BOOST_REQUIRE_EQUAL(transmissibility.calls.size(), 2U);
+
+    BOOST_CHECK_EQUAL(std::get<0>(transmissibility.calls[0]), 0U);
+    BOOST_CHECK_EQUAL(std::get<1>(transmissibility.calls[0]),
+                      static_cast<unsigned>(Opm::FaceDir::ToIntersectionIndex(Opm::FaceDir::XMinus)));
+    BOOST_CHECK_CLOSE(std::get<2>(transmissibility.calls[0]), 4.5, 1e-12);
+
+    BOOST_CHECK_EQUAL(std::get<0>(transmissibility.calls[1]), 1U);
+    BOOST_CHECK_EQUAL(std::get<1>(transmissibility.calls[1]),
+                      static_cast<unsigned>(Opm::FaceDir::ToIntersectionIndex(Opm::FaceDir::XPlus)));
+    BOOST_CHECK_CLOSE(std::get<2>(transmissibility.calls[1]), 7.25, 1e-12);
 }
