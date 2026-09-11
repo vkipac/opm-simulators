@@ -48,6 +48,8 @@
 #include <opm/simulators/flow/countGlobalCells.hpp>
 #include <opm/simulators/flow/EclGenericWriter.hpp>
 #include <opm/simulators/flow/FlowBaseVanguard.hpp>
+#include <opm/simulators/flow/flux/FluxDumper.hpp>
+#include <opm/simulators/flow/flux/FluxRegions.hpp>
 #include <opm/simulators/timestepping/SimulatorTimer.hpp>
 #include <opm/simulators/utils/DeferredLoggingErrorHelpers.hpp>
 #include <opm/simulators/utils/ParallelRestart.hpp>
@@ -198,6 +200,7 @@ public:
         }
 
         this->rank_ = this->simulator_.vanguard().grid().comm().rank();
+        this->initializeFluxDumpers_();
 
         this->simulator_.vanguard().eclState().computeFipRegionStatistics();
     }
@@ -970,11 +973,92 @@ private:
             : 0;
     }
 
+    int fluxPhaseMask_() const
+    {
+        auto mask = 0;
+
+        if (FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)) {
+            mask |= static_cast<int>(EclIO::FluxFile::Phase::Oil);
+        }
+        if (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)) {
+            mask |= static_cast<int>(EclIO::FluxFile::Phase::Water);
+        }
+        if (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
+            mask |= static_cast<int>(EclIO::FluxFile::Phase::Gas);
+        }
+
+        return mask;
+    }
+
+    void initializeFluxDumpers_()
+    {
+        if (!this->collectOnIORank_.isIORank()) {
+            return;
+        }
+
+        const auto& state = this->eclState();
+        const auto& fieldProps = state.globalFieldProps();
+
+        if (!fieldProps.has_int("FLUXREG")) {
+            return;
+        }
+
+        const auto& regionValues = fieldProps.get_int("FLUXREG");
+        const auto dims = state.gridDims().getNXYZ();
+
+        std::vector<std::array<int, 2>> nncConnections;
+        if (state.hasInputNNC()) {
+            const auto& inputNnc = state.getInputNNC().input();
+            nncConnections.reserve(inputNnc.size());
+            for (const auto& nnc : inputNnc) {
+                nncConnections.push_back({
+                    static_cast<int>(nnc.cell1),
+                    static_cast<int>(nnc.cell2),
+                });
+            }
+        }
+
+        if (state.hasPinchNNC()) {
+            const auto& pinchNnc = state.getPinchNNC();
+            nncConnections.reserve(nncConnections.size() + pinchNnc.size());
+            for (const auto& nnc : pinchNnc) {
+                nncConnections.push_back({
+                    static_cast<int>(nnc.cell1),
+                    static_cast<int>(nnc.cell2),
+                });
+            }
+        }
+
+        const auto regions = FluxRegions::extract(dims, regionValues, nncConnections);
+        if (regions.empty()) {
+            return;
+        }
+
+        const auto& io = state.getIOConfig();
+        const auto phaseMask = this->fluxPhaseMask_();
+
+        this->fluxDumpers_.reserve(regions.size());
+        for (const auto& region : regions) {
+            this->fluxDumpers_.emplace_back(io.getBaseName(),
+                                            region.regionId,
+                                            dims,
+                                            region,
+                                            EclIO::FluxFile::Mode::Flux,
+                                            EclIO::FluxFile::Sampling::Averaged,
+                                            phaseMask);
+        }
+
+        OpmLog::note("DUMPFLUX bootstrap: initialized "
+                     + std::to_string(this->fluxDumpers_.size())
+                     + " region dumper(s) from FLUXREG");
+    }
+
     Simulator& simulator_;
     std::unique_ptr<OutputModule> outputModule_;
     Scalar restartTimeStepSize_;
     int rank_ ;
     Inplace inplace_;
+    std::vector<FluxDumper> fluxDumpers_;
 };
 
 } // namespace Opm
