@@ -1,15 +1,26 @@
 opm_set_test_driver(${PROJECT_SOURCE_DIR}/tests/run-test.sh "")
 
-if (TARGET flow_blackoil)
+if (BUILD_FLOW)
+  opm_add_executable(
+    TARGET
+      flux_smoke_shape_check
+    SOURCES
+      tests/flux/flux_smoke_shape_check.cpp
+    LIBRARIES
+      opmcommon
+  )
+
   set(_flux_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_dump_smoke)
 
   opm_add_test(flux_dump_smoke
+    DEPENDS
+      flux_smoke_shape_check
     EXE_TARGET
       flow_blackoil
     DRIVER_ARGS
       -i ${PROJECT_SOURCE_DIR}/tests/flux
       -r ${_flux_result_path}
       -f FLUX_DUMP_SMOKE
-      -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-smoke.sh"
+      -p "${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check FLUX_DUMP_SMOKE.FLUX"
   )
 endif()
