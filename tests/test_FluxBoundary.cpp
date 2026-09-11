@@ -368,3 +368,20 @@ BOOST_AUTO_TEST_CASE(SelectInputPathIgnoresDirectoryCandidates)
 
     std::filesystem::remove_all(dir);
 }
+
+BOOST_AUTO_TEST_CASE(SelectInputPathPrefersLowestValidAmongMixedCandidates)
+{
+    const auto dir = std::filesystem::path{"test_fluxboundary_input_select_mixed"};
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+
+    const std::string base = "CASE";
+    std::ofstream((dir / "CASE.FLUX0007").string()).put('\n');
+    std::ofstream((dir / "CASE.FLUX0002").string()).put('\n');
+    std::ofstream((dir / "CASE.FLUXABCD").string()).put('\n');
+
+    const auto selected = Opm::FluxBoundary::selectInputPath(dir, base);
+    BOOST_CHECK_EQUAL(selected, dir / "CASE.FLUX0002");
+
+    std::filesystem::remove_all(dir);
+}
