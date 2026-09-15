@@ -386,6 +386,12 @@ namespace {
             eclipseState = createEclipseState(comm, deck);
         }
 
+        // Reduce the active set to the selected USEFLUX region before the
+        // Schedule is created. The Schedule resolves well connections against
+        // the grid, so doing this afterwards would leave connections pointing
+        // at cells that no longer exist.
+        applyUseFluxActnum(*eclipseState);
+
         // A fracture model reads its seeds out of the deck during the run, not
         // only at setup, so a FRAC run has to retain the Schedule keywords
         // whatever the general setting says.  Decided here rather than by the
@@ -825,7 +831,6 @@ void Opm::readDeck(Opm::Parallel::Communication    comm,
                          keepKeywords, outputInterval, *errorGuard, slaveMode);
 
             assert(eclipseState);
-            applyUseFluxActnum(*eclipseState);
 
             // Update schedule so that re-parsing after actions use same strictness
             assert(schedule);

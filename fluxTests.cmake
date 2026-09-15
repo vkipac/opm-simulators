@@ -270,6 +270,34 @@ if (BUILD_FLOW)
         -f ONEWELL_DUMPFLUX_FLUX_1D
         -p "bash ${PROJECT_SOURCE_DIR}/tests/check-onewell-useflux-flux-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_COMPARE_ECL_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/ONEWELL_DUMPFLUX_FLUX_1D.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/ONEWELL_USEFLUX_FLUX_1D.DATA"
     )
+
+    set(_twowell_useflux_flux_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+twowell_useflux_flux_smoke)
+
+    opm_add_test(twowell_useflux_flux_smoke
+      DEPENDS
+        flux_smoke_shape_check
+      EXE_TARGET
+        flow_blackoil
+      DRIVER_ARGS
+        -i ${PROJECT_SOURCE_DIR}/tests/data/sector
+        -r ${_twowell_useflux_flux_result_path}
+        -f TWOWELL_DUMPFLUX_FLUX_1D
+        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-twowell-useflux-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_COMPARE_ECL_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_DUMPFLUX_FLUX_1D.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_USEFLUX_FLUX_1D.DATA"
+    )
+
+    set(_twowell_useflux_pressure_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+twowell_useflux_pressure_smoke)
+
+    opm_add_test(twowell_useflux_pressure_smoke
+      DEPENDS
+        flux_smoke_shape_check
+      EXE_TARGET
+        flow_blackoil
+      DRIVER_ARGS
+        -i ${PROJECT_SOURCE_DIR}/tests/data/sector
+        -r ${_twowell_useflux_pressure_result_path}
+        -f TWOWELL_DUMPFLUX_PRESSURE_1D
+        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-twowell-useflux-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_COMPARE_ECL_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_DUMPFLUX_PRESSURE_1D.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_USEFLUX_PRESSURE_1D.DATA"
+    )
   endif()
 
   set(_useflux_both_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+useflux_both_smoke)

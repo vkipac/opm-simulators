@@ -306,6 +306,7 @@ public:
 
         if (episodeIdx >= 0) {
             this->restoreFluxUdqState_(episodeIdx);
+            this->applyFluxGroupTargetCorrection_(episodeIdx);
         }
 
         if (episodeIdx >= 0) {
@@ -680,12 +681,195 @@ public:
         }
     }
 
+    //! \brief Names of the wells that have at least one connection inside the
+    //!        USEFLUX region.
+    //! \details The consumer deck is the parent deck, so the schedule still
+    //!          describes every well. Wells completed outside the region have
+    //!          no active connection and take no part in the sector run.
+    std::vector<std::string> fluxLocalWellNames_(const std::size_t stepIdx) const
+    {
+        const auto& vanguard = this->simulator().vanguard();
+        const auto& schedule = vanguard.schedule();
+
+        std::vector<std::string> localWells;
+        for (const auto& wellName : schedule.wellNames(stepIdx)) {
+            const auto& well = schedule.getWell(wellName, stepIdx);
+
+            const auto connected =
+                std::any_of(well.getConnections().begin(), well.getConnections().end(),
+                            [&vanguard](const auto& conn)
+                            {
+                                return vanguard.compressedIndex(conn.global_index()) >= 0;
+                            });
+
+            if (connected) {
+                localWells.push_back(wellName);
+            }
+        }
+
+        return localWells;
+    }
+
+    //! \brief Remove the contribution of wells outside the region from group
+    //!        production targets.
+    //! \details A group target in the parent deck is shared by every member of
+    //!          the group. The sector only holds the members inside the region,
+    //!          so the target has to be reduced by what the remaining members
+    //!          produced in the parent run, otherwise the sector wells take over
+    //!          the whole group target.
+    //!
+    //!          Only the SummaryState is adjusted. The UDQ state is left alone
+    //!          so that recursive UDQ definitions keep evaluating as they do in
+    //!          the parent run.
+    void applyFluxGroupTargetCorrection_(const int episodeIdx)
+    {
+        const auto* fluxData = this->fluxBoundaryData_();
+        const auto* fluxStep = this->fluxBoundaryReportStep_();
+        if (!fluxData || !fluxStep || fluxData->summaryKeys.empty()) {
+            return;
+        }
+
+        if (fluxData->summaryKeys.size() != fluxStep->summaryValues.size()) {
+            return;
+        }
+
+        auto& vanguard = this->simulator().vanguard();
+        auto& summaryState = vanguard.summaryState();
+        const auto& udqState = vanguard.udqState();
+        const auto& schedule = vanguard.schedule();
+        const auto stepIdx = static_cast<std::size_t>(episodeIdx);
+
+        std::unordered_map<std::string, double> parentValues;
+        parentValues.reserve(fluxData->summaryKeys.size());
+        for (std::size_t index = 0; index < fluxData->summaryKeys.size(); ++index) {
+            parentValues.emplace(fluxData->summaryKeys[index], fluxStep->summaryValues[index]);
+        }
+
+        const auto localWells = this->fluxLocalWellNames_(stepIdx);
+        const auto isLocal = [&localWells](const std::string& wellName)
+        {
+            return std::find(localWells.begin(), localWells.end(), wellName) != localWells.end();
+        };
+
+        std::vector<std::string> absentWells;
+        for (const auto& wellName : schedule.wellNames(stepIdx)) {
+            if (!isLocal(wellName)) {
+                absentWells.push_back(wellName);
+            }
+        }
+
+        if (absentWells.empty()) {
+            return;
+        }
+
+        const auto inGroup = [&schedule, stepIdx](const std::string& wellName,
+                                                  const std::string& groupName)
+        {
+            if (!schedule.hasWell(wellName, stepIdx)) {
+                return false;
+            }
+
+            auto currentGroup = schedule.getWell(wellName, stepIdx).groupName();
+            while (!currentGroup.empty()) {
+                if (currentGroup == groupName) {
+                    return true;
+                }
+
+                if (!schedule.hasGroup(currentGroup, stepIdx)) {
+                    break;
+                }
+
+                const auto parentGroup = schedule.getGroup(currentGroup, stepIdx).flow_group();
+                if (!parentGroup.has_value()) {
+                    break;
+                }
+
+                currentGroup = *parentGroup;
+            }
+
+            return false;
+        };
+
+        std::unordered_set<std::string> correctedTargets;
+
+        const auto correctTarget = [&](const UDAValue& target,
+                                       const std::string& groupName,
+                                       const std::string& ratePrefix)
+        {
+            if (!target.is<std::string>()) {
+                // A literal target cannot be rewritten here; the group control
+                // itself would have to be modified.
+                return;
+            }
+
+            const auto udqName = target.get<std::string>();
+
+            // Read the uncorrected value from the UDQ state rather than the
+            // summary state: the summary value may already hold the correction
+            // from an earlier time step, and subtracting again would compound.
+            if (!udqState.has(udqName)) {
+                return;
+            }
+
+            if (!correctedTargets.insert(udqName).second) {
+                return;
+            }
+
+            double absentRate = 0.0;
+            for (const auto& wellName : absentWells) {
+                if (!inGroup(wellName, groupName)) {
+                    continue;
+                }
+
+                const auto it = parentValues.find(ratePrefix + wellName);
+                if ((it != parentValues.end()) && std::isfinite(it->second)) {
+                    absentRate += it->second;
+                }
+            }
+
+            if (!(std::abs(absentRate) > 0.0)) {
+                return;
+            }
+
+            const auto corrected = udqState.get(udqName) - absentRate;
+            if (std::isfinite(corrected)) {
+                summaryState.set(udqName, corrected);
+            }
+        };
+
+        for (const auto& groupName : schedule.groupNames(stepIdx)) {
+            if (!schedule.hasGroup(groupName, stepIdx)) {
+                continue;
+            }
+
+            const auto& group = schedule.getGroup(groupName, stepIdx);
+            if (!group.isProductionGroup()) {
+                continue;
+            }
+
+            const auto& production = group.productionProperties();
+            correctTarget(production.oil_target, groupName, "WOPR:");
+            correctTarget(production.water_target, groupName, "WWPR:");
+            correctTarget(production.gas_target, groupName, "WGPR:");
+            correctTarget(production.liquid_target, groupName, "WLPR:");
+        }
+    }
+
     /*!
      * \brief Called by the simulator before each time integration.
      */
     void beginTimeStep() override
     {
         FlowProblemType::beginTimeStep();
+
+        // UDA group targets may be driven by UDQs that evolve on every time
+        // step, so the correction for wells outside the region has to follow
+        // the same cadence rather than being applied once per report step.
+        const int episodeIdx = this->simulator().episodeIndex();
+        if (episodeIdx >= 0) {
+            this->applyFluxGroupTargetCorrection_(episodeIdx);
+        }
+
         hybridNewton_.tryApplyHybridNewton();
     }
 
