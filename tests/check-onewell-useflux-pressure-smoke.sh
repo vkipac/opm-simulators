@@ -15,7 +15,7 @@ cp "$consumer_deck" "${consumer_base}.DATA"
 "$flow_bin" "${consumer_base}.DATA" --output-dir="$(pwd)" > onewell_use_pressure.log 2>&1
 
 for keyword in WOPR:P1 WBHP:P1 GOPR:G1 WWPR:P1 WGPR:P1; do
-    "$compare_bin" -t SMRY -k "$keyword" "$producer_base" "$consumer_base" 5e-2 5e-2
+    "$compare_bin" -t SMRY -k "$keyword" "$producer_base" "$consumer_base" 1e-2 1e-2
 done
 
 grep -q "End of simulation" onewell_use_pressure.log

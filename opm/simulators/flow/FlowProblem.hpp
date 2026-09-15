@@ -1265,7 +1265,13 @@ public:
             const auto* fluxData = this->fluxBoundaryData_();
             const auto mode = fluxData ? fluxData->header.mode : EclIO::FluxFile::Mode::Flux;
             const auto pressureEnabled = (static_cast<int>(mode) & static_cast<int>(EclIO::FluxFile::Mode::Pressure)) != 0;
-            if (pressureEnabled) {
+
+            // Only the faces that the FLUX file actually describes may act as a
+            // pressure boundary. The remaining outer faces of the sector are
+            // ordinary no-flow boundaries; treating them as Dirichlet would
+            // surround the region with a constant-pressure source taken from the
+            // initial state.
+            if (pressureEnabled && this->fluxBoundaryFaceSlot_(globalSpaceIdx, dir) > 0) {
                 return { BCType::FREE, RateVector(0.0) };
             }
 

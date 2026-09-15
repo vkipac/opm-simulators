@@ -90,6 +90,23 @@ FluxDumper::FluxDumper(std::string parentCaseName,
     }
 }
 
+void FluxDumper::setBoundaryTransmissibilities(const std::vector<double>& boundaryTransmissibilities)
+{
+    if (boundaryTransmissibilities.size() != this->data_.boundaryFaces.size()) {
+        OPM_THROW(std::invalid_argument,
+                  "FluxDumper: transmissibility vector must match boundary face count");
+    }
+
+    for (std::size_t i = 0; i < this->data_.boundaryFaces.size(); ++i) {
+        this->data_.boundaryFaces[i].transmissibility = boundaryTransmissibilities[i];
+    }
+}
+
+const std::vector<FluxRegions::BoundaryFace>& FluxDumper::regionBoundaryFaces() const
+{
+    return this->regionBoundaryFaces_;
+}
+
 std::vector<double> FluxDumper::aggregateRates(
     const Sampling sampling,
     const std::vector<std::vector<double>>& rateSnapshots,

@@ -1211,11 +1211,48 @@ private:
         }
     }
 
+    // The boundary transmissibilities are not available while the writer is
+    // being constructed, so record them the first time a report step is dumped.
+    // The consumer uses these to reproduce the parent's inter-cell
+    // transmissibility instead of the (larger) default outer-boundary value.
+    void assignFluxDumperTransmissibilities_()
+    {
+        if (this->fluxTransmissibilitiesAssigned_ || this->fluxDumpers_.empty()) {
+            return;
+        }
+
+        this->fluxTransmissibilitiesAssigned_ = true;
+
+        const auto& vanguard = this->simulator_.vanguard();
+        const auto& problem = this->simulator_.problem();
+
+        for (auto& dumper : this->fluxDumpers_) {
+            const auto& faces = dumper.regionBoundaryFaces();
+
+            std::vector<double> trans(faces.size(), 0.0);
+            for (std::size_t i = 0; i < faces.size(); ++i) {
+                const auto& face = faces[i];
+                const auto interior = vanguard.compressedIndex(face.interiorGlobalCell);
+                const auto exterior = vanguard.compressedIndex(face.exteriorGlobalCell);
+                if (interior < 0 || exterior < 0) {
+                    continue;
+                }
+
+                trans[i] = problem.transmissibility(static_cast<unsigned>(interior),
+                                                    static_cast<unsigned>(exterior));
+            }
+
+            dumper.setBoundaryTransmissibilities(trans);
+        }
+    }
+
     void updateFluxDumpers_(const int reportStepNum, const bool isSubStep)
     {
         if (isSubStep || this->fluxDumpers_.empty()) {
             return;
         }
+
+        this->assignFluxDumperTransmissibilities_();
 
         const auto& flows = this->outputModule_->getFlows();
         const auto& floresn = this->collectOnIORank_.isParallel()
@@ -1411,6 +1448,7 @@ private:
     std::map<std::pair<int, int>, int> fluxNncPairToIndex_;
     std::vector<std::vector<double>> fluxCapturedFaceRates_;
     bool fluxMissingFloresReported_ = false;
+    bool fluxTransmissibilitiesAssigned_ = false;
 };
 
 } // namespace Opm

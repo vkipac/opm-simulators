@@ -77,8 +77,10 @@ public:
     void appendReportStep(const ReportStepData& stepData);
     void write(const std::string& filename, bool formatted = false) const;
     void setSummaryKeys(std::vector<std::string> summaryKeys);
+    void setBoundaryTransmissibilities(const std::vector<double>& boundaryTransmissibilities);
 
     const EclIO::FluxFile::Data& data() const;
+    const std::vector<FluxRegions::BoundaryFace>& regionBoundaryFaces() const;
 
 private:
     static int countPhases(int phaseMask);
