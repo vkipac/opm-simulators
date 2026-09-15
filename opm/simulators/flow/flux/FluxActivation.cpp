@@ -35,14 +35,28 @@ bool applyUseFluxActnum(EclipseState& eclipseState)
     }
 
     const auto& fieldProps = eclipseState.globalFieldProps();
-    if (!fieldProps.has_int("FLUXNUM")) {
+
+    std::vector<int> regionValues;
+    if (fieldProps.has_int("FLUXNUM")) {
+        regionValues = fieldProps.get_global_int("FLUXNUM");
+    }
+    else if (fieldProps.has_int("FLUXREG")) {
+        regionValues = fieldProps.get_global_int("FLUXREG");
+    }
+    else {
         OPM_THROW(std::invalid_argument,
-                  "applyUseFluxActnum(): USEFLUX requires FLUXNUM in the sector deck");
+                  "applyUseFluxActnum(): USEFLUX requires FLUXNUM or FLUXREG in the sector deck");
     }
 
-    const auto& regionValues = fieldProps.get_int("FLUXNUM");
     const auto regionId = FluxRegions::uniqueSelectedRegion(regionValues);
-    eclipseState.reset_actnum(FluxRegions::buildActnum(regionValues, regionId));
+    auto actnum = FluxRegions::buildActnum(regionValues, regionId);
+
+    const auto& currentActnum = eclipseState.globalFieldProps().actnumRaw();
+    for (std::size_t index = 0; index < actnum.size(); ++index) {
+        actnum[index] = actnum[index] && currentActnum[index];
+    }
+
+    eclipseState.reset_actnum(actnum);
     return true;
 }
 

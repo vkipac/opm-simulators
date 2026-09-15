@@ -1351,24 +1351,35 @@ protected:
         const auto base = faceIndex * phaseCount;
         std::size_t phaseSlot = 0;
 
+        // The stored rates are total volumetric rates across the face, positive
+        // into the sector. The linearizer multiplies the boundary rate vector by
+        // the face area, and opm-models orients boundary rates along the outer
+        // normal, i.e. a flux into the domain is negative. Convert accordingly.
+        const auto faceArea = this->fluxBoundaryFaceAreaAt_(globalSpaceIdx, dir);
+        if (!(faceArea > 0.0)) {
+            return false;
+        }
+
+        const auto areaScale = Scalar{-1} / faceArea;
+
         if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Oil)) {
             if (FluidSystem::phaseIsActive(oilPhaseIdx)) {
                 phaseVolRate[FluidSystem::canonicalToActiveCompIdx(oilCompIdx)] =
-                    fluxStep->rates[base + phaseSlot];
+                    fluxStep->rates[base + phaseSlot] * areaScale;
             }
             ++phaseSlot;
         }
         if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Water)) {
             if (FluidSystem::phaseIsActive(waterPhaseIdx)) {
                 phaseVolRate[FluidSystem::canonicalToActiveCompIdx(waterCompIdx)] =
-                    fluxStep->rates[base + phaseSlot];
+                    fluxStep->rates[base + phaseSlot] * areaScale;
             }
             ++phaseSlot;
         }
         if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Gas)) {
             if (FluidSystem::phaseIsActive(gasPhaseIdx)) {
                 phaseVolRate[FluidSystem::canonicalToActiveCompIdx(gasCompIdx)] =
-                    fluxStep->rates[base + phaseSlot];
+                    fluxStep->rates[base + phaseSlot] * areaScale;
             }
         }
 
@@ -1866,6 +1877,7 @@ protected:
         if (!ioConfig.getUseFlux()) {
             this->fluxBoundary_.reset();
             this->fluxBoundaryFaceIndex_.data = {};
+            this->fluxBoundaryFaceArea_.data = {};
             return;
         }
 
@@ -1906,11 +1918,52 @@ protected:
         this->fluxBoundaryFaceIndex_.resize(numElems, 0);
         this->fluxBoundaryFaceIndex_.data = fluxBoundary.buildDirectionalFaceIndices(numElems);
         this->fluxBoundary_ = std::make_shared<FluxBoundary>(std::move(fluxBoundary));
+        this->collectFluxBoundaryFaceAreas_(numElems);
         this->applyFluxBoundaryTransmissibilityOverrides_();
 
         if (!this->fluxBoundary_->faces().empty()) {
             this->nonTrivialBoundaryConditions_ = true;
         }
+    }
+
+    // The FLUX file stores total volumetric rates across each boundary face,
+    // while the linearizer multiplies the boundary rate vector by the face
+    // area. Record the areas so the prescribed rates can be normalised.
+    void collectFluxBoundaryFaceAreas_(const std::size_t numElems)
+    {
+        this->fluxBoundaryFaceArea_.resize(numElems, 0.0);
+
+        if (!this->fluxBoundary_) {
+            return;
+        }
+
+        const auto& gridView = this->simulator().vanguard().gridView();
+        const auto& elementMapper = this->model().elementMapper();
+
+        for (const auto& elem : elements(gridView)) {
+            const auto elemIdx = elementMapper.index(elem);
+            for (const auto& is : intersections(gridView, elem)) {
+                if (!is.boundary()) {
+                    continue;
+                }
+
+                const auto dir = FaceDir::FromIntersectionIndex(is.indexInInside());
+                auto& areas = this->fluxBoundaryFaceArea_(dir);
+                if (static_cast<std::size_t>(elemIdx) < areas.size()) {
+                    areas[elemIdx] = is.geometry().volume();
+                }
+            }
+        }
+    }
+
+    Scalar fluxBoundaryFaceAreaAt_(const unsigned int globalSpaceIdx, const FaceDir::DirEnum dir) const
+    {
+        const auto& areas = this->fluxBoundaryFaceArea_(dir);
+        if (globalSpaceIdx >= areas.size()) {
+            return 0.0;
+        }
+
+        return areas[globalSpaceIdx];
     }
 
     void applyFluxBoundaryTransmissibilityOverrides_()
@@ -2107,6 +2160,7 @@ protected:
 
     BCData<int> bcindex_;
     BCData<int> fluxBoundaryFaceIndex_;
+    BCData<Scalar> fluxBoundaryFaceArea_;
     std::shared_ptr<FluxBoundary> fluxBoundary_;
     bool nonTrivialBoundaryConditions_ = false;
     bool first_step_ = true;

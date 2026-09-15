@@ -1,0 +1,697 @@
+
+
+
+ ########  #          ######   #           #
+ #         #         #      #   #         # 
+ #####     #         #      #    #   #   #  
+ #         #         #      #     # # # #   
+ #         #######    ######       #   #    
+
+Flow is a simulator for fully implicit three-phase black-oil flow, and is part of OPM.
+For more information visit: https://opm-project.org 
+
+Flow Version     =  2026.10-pre (debug)
+Machine name     =  st-lintgx0120.st.statoil.no (Number of logical cores: 10, Memory size: 152591.56 MB) 
+Operating system =  Linux x86_64 (Kernel: 4.18.0-553.139.1.el8_10.x86_64, #1 SMP Sun Jun 28 20:54:52 EDT 2026 )
+Build time       =  2026-09-14 at 09:09:28 hrs
+User             =  vkip
+Simulation started on 15-09-2026 at 10:39:01 hrs
+Using 1 MPI processes with 2 OMP threads on each 
+Parameters used by Flow:
+# [known parameters which were specified at run-time]
+EclDeckFileName="../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA" # default: ""
+# [parameters which were specified at compile-time]
+AcceleratorMode="none"
+ActionParsingStrictness="normal"
+AddCorners="0"
+AllowDistributedWells="0"
+AllowSplittingInactiveWells="1"
+AlternativeWellRateInit="1"
+CheckGroupConstraintsInnerWellIterations="1"
+CheckSatfuncConsistency="1"
+ConserveInnerEnergyThermal="0"
+ContinueOnConvergenceError="0"
+ConvergenceMonitoring="0"
+ConvergenceMonitoringCutOff="6"
+ConvergenceMonitoringDecayFactor="0.75"
+ConvertToMultisegmentWell="none"
+CprReuseInterval="30"
+CprReuseSetup="4"
+CprWeightsThreadParallel="0"
+DbhpMaxRel="1"
+DebugEmitCellPartition="0"
+DebugVerbosityLevel="1"
+DpMaxRel="0.3"
+DsMax="0.2"
+DwellFractionMax="0.2"
+EclOutputDoublePrecision="0"
+EclOutputInterval="-1"
+EdgeConformal="0"
+EdgeWeightsMethod="transmissibility"
+EnableAdaptiveTimeStepping="1"
+EnableAsyncEclOutput="1"
+EnableAsyncVtkOutput="1"
+EnableDriftCompensation="0"
+EnableDriftCompensationTemp="1"
+EnableDryRun="auto"
+EnableEclOutput="1"
+EnableEsmry="1"
+EnableGravity="1"
+EnableGridAdaptation="0"
+EnableIntensiveQuantityCache="1"
+EnableLoggingFalloutWarning="0"
+EnableOpmRstFile="0"
+EnableStorageCache="1"
+EnableTerminalOutput="1"
+EnableThermodynamicHints="0"
+EnableTuning="0"
+EnableVtkOutput="0"
+EnableWellOperabilityCheck="1"
+EnableWellOperabilityCheckIter="0"
+EnableWriteAllSolutions="0"
+EndStep="-1"
+EndTime="1e+100"
+ExplicitRockCompaction="0"
+ExternalPartition=""
+ForceDisableFluidInPlaceOutput="0"
+ForceDisableResvFluidInPlaceOutput="0"
+FullTimeStepInitially="0"
+GpuAwareMpi="0"
+GpuDeviceId="0"
+GroupControlFractionTolerance="0.0001"
+HybridNewtonConfigFile="hybridNewtonConfig.json"
+IgnoreKeywords=""
+IluFillinLevel="0"
+IluRedblack="0"
+IluRelaxation="0.9"
+IluReorderSpheres="0"
+ImbalanceTol="1.1"
+InitialTimeStepInDays="1"
+InitialTimeStepSize="86400"
+InjMultDampMult="0.9"
+InjMultMinDampFactor="0.05"
+InjMultOscThreshold="0.1"
+InputSkipMode="100"
+LinearSolver="cprw"
+LinearSolverAccelerator="cpu"
+LinearSolverIgnoreConvergenceFailure="0"
+LinearSolverMaxIter="200"
+LinearSolverPrintJsonDefinition="1"
+LinearSolverReduction="0.01"
+LinearSolverRestart="40"
+LinearSolverVerbosity="0"
+LoadFile=""
+LoadStep="-1"
+LocalDomainsOrderingMeasure="maxpressure"
+LocalDomainsPartitionWellNeighborLevels="1"
+LocalDomainsPartitioningImbalance="1.03"
+LocalDomainsPartitioningMethod="zoltan"
+LocalSolveApproach="gauss-seidel"
+LocalToleranceScalingCnv="0.1"
+LocalToleranceScalingMb="1"
+LocalWellSolveControlSwitching="1"
+MatrixAddWellContributions="0"
+MaxInnerIterMsWells="100"
+MaxInnerIterWells="50"
+MaxLocalSolveIterations="20"
+MaxNewtonIterationsWithInnerWellIterations="99"
+MaxPressureChangeMsWells="1e+06"
+MaxResidualAllowed="1e+07"
+MaxSinglePrecisionDays="20"
+MaxTemperatureChange="5"
+MaxTimeStepDivisions="10"
+MaxTimeStepSize="inf"
+MaxWellStatusSwitchForWells="99"
+MaxWellStatusSwitchInInnerIterWells="99"
+MaxWelleqIter="30"
+MaximumNumberOfGroupSwitches="3"
+MaximumNumberOfWellSwitches="3"
+MaximumWaterSaturation="1"
+MetisParams="default"
+MiluVariant="ilu"
+MinStrictCnvIter="-1"
+MinStrictMbIter="-1"
+MinTimeStepBasedOnNewtonIterations="0"
+MinTimeStepBeforeShuttingProblematicWellsInDays="0.01"
+MinTimeStepSize="0"
+NetworkMaxOuterIterations="3"
+NetworkMaxPressureUpdateInBars="5"
+NetworkMaxStrictOuterIterations="10"
+NetworkMaxSubIterations="100"
+NetworkPressureUpdateDampingFactor="0.1"
+NewtonMaxError="1e+100"
+NewtonMaxIterations="20"
+NewtonMaxRelax="0.5"
+NewtonMinIterations="2"
+NewtonRelaxationType="dampen"
+NewtonTargetIterations="10"
+NewtonTolerance="0.01"
+NewtonVerbose="1"
+NewtonWriteConvergence="0"
+NlddLocalLinearSolver="ilu0"
+NlddLocalLinearSolverMaxIter="200"
+NlddLocalLinearSolverReduction="0.01"
+NlddNumInitialNewtonIter="1"
+NlddRelativeMobilityChangeTol="0.1"
+NonlinearSolver="newton"
+NumLocalDomains="0"
+NumOverlap="1"
+NumPressurePointsEquil="2000"
+NumSatfuncConsistencySamplePoints="5"
+NupcolGroupRateTolerance="0.001"
+OpenclIluParallel="1"
+OpenclPlatformId="0"
+OutputDir=""
+OutputExtraConvergenceInfo="none"
+OutputInterval="1"
+OutputMode="all"
+OwnerCellsFirst="1"
+ParameterFile=""
+ParsingStrictness="normal"
+PartitionMethod="zoltanwell"
+PreSolveNetwork="1"
+PredeterminedTimeStepsFile=""
+PressureMax="1e+99"
+PressureMin="-1e+99"
+PressureScale="1"
+PriVarOscilationThreshold="1e-05"
+PrintParameters="2"
+ProjectSaturations="0"
+RcNetworkLooseCoupling="0"
+RegularizationFactorWells="100"
+RelaxedLinearSolverReduction="0.01"
+RelaxedMaxPvFraction="0.03"
+RelaxedPressureTolMsw="10000"
+RelaxedWellFlowTol="0.001"
+RescoupSyncAtReportSteps="0"
+RestartTime="-1e+35"
+RestartWritingInterval="16777215"
+SaveFile=""
+SaveStep=""
+ScaleLinearSystem="0"
+SchedRestart="0"
+SeparateSparseSourceTerms="0"
+SerialPartitioning="0"
+ShutUnsolvableWells="1"
+Slave="0"
+SolveWelleqInitially="1"
+SolverContinueOnConvergenceFailure="0"
+SolverGrowthFactor="2"
+SolverMaxGrowth="3"
+SolverMaxRestarts="10"
+SolverMaxTimeStepInDays="365"
+SolverMinTimeStep="1e-12"
+SolverRestartFactor="0.33"
+SolverVerbosity="1"
+StrictInnerIterWells="40"
+StrictOuterIterWells="6"
+TemperatureMax="1e+09"
+TemperatureMin="0"
+ThreadsPerProcess="2"
+TimeStepAfterEventInDays="-1"
+TimeStepControl="pid+newtoniteration"
+TimeStepControlDecayDampingFactor="1"
+TimeStepControlDecayRate="0.75"
+TimeStepControlFileName="timesteps"
+TimeStepControlGrowthDampingFactor="3.2"
+TimeStepControlGrowthRate="1.25"
+TimeStepControlMaxReductionTimeStep="0.1"
+TimeStepControlParameters="0.125;0.25;0.125;0.75;0.25"
+TimeStepControlRejectCompletedStep="0"
+TimeStepControlSafetyFactor="0.8"
+TimeStepControlTargetIterations="30"
+TimeStepControlTargetNewtonIterations="8"
+TimeStepControlTolerance="0.1"
+TimeStepControlToleranceTestVersion="standard"
+TimeStepVerbosity="1"
+ToleranceCnv="0.01"
+ToleranceCnvEnergy="0.4182"
+ToleranceCnvEnergyRelaxed="41.82"
+ToleranceCnvRelaxed="1"
+ToleranceEnergyBalance="4.182e-06"
+ToleranceEnergyBalanceRelaxed="4.182e-05"
+ToleranceMaxDp="0"
+ToleranceMaxDrs="0"
+ToleranceMaxDrv="0"
+ToleranceMaxDs="0"
+ToleranceMb="1e-07"
+ToleranceMbRelaxed="1e-06"
+TolerancePressureMsWells="1000"
+ToleranceWellControl="1e-07"
+ToleranceWells="0.0001"
+TpsaIluFillinLevel="0"
+TpsaIluRelaxation="0.9"
+TpsaLinearSolver="hypre"
+TpsaLinearSolverIgnoreConvergenceFailure="0"
+TpsaLinearSolverMaxIter="200"
+TpsaLinearSolverPrintJsonDefinition="0"
+TpsaLinearSolverReduction="0.001"
+TpsaLinearSolverRestart="40"
+TpsaLinearSolverVerbosity="0"
+TpsaNewtonMaxError="1e+100"
+TpsaNewtonMaxIterations="20"
+TpsaNewtonMinIterations="1"
+TpsaNewtonTargetIterations="10"
+TpsaNewtonTolerance="0.001"
+TpsaNewtonVerbosity="1"
+TpsaRelaxedLinearSolverReduction="0.001"
+TpsaUseGmres="0"
+TruncateTimeStepToFloat="0"
+UpdateEquationsScaling="0"
+UseAverageDensityMsWells="0"
+UseGmres="0"
+UseHybridNewton="0"
+UseImplicitIpr="1"
+UseMultisegmentWell="1"
+UseUpdateStabilization="1"
+VerifyGpuAwareMpi="0"
+VtkWriteAverageMolarMasses="0"
+VtkWriteDensities="1"
+VtkWriteDofIndex="0"
+VtkWriteExtrusionFactor="0"
+VtkWriteFilterVelocities="0"
+VtkWriteFugacities="0"
+VtkWriteFugacityCoeffs="0"
+VtkWriteGasDissolutionFactor="0"
+VtkWriteGasFormationVolumeFactor="0"
+VtkWriteGasSaturationPressure="0"
+VtkWriteIntrinsicPermeabilities="0"
+VtkWriteMassFractions="0"
+VtkWriteMobilities="0"
+VtkWriteMolarities="0"
+VtkWriteMoleFractions="1"
+VtkWriteOilFormationVolumeFactor="0"
+VtkWriteOilSaturationPressure="0"
+VtkWriteOilVaporizationFactor="0"
+VtkWritePorosity="1"
+VtkWritePotentialGradients="0"
+VtkWritePressures="1"
+VtkWritePrimaryVars="0"
+VtkWritePrimaryVarsMeaning="0"
+VtkWriteProcessRank="0"
+VtkWriteRelativePermeabilities="1"
+VtkWriteSaturatedGasOilVaporizationFactor="0"
+VtkWriteSaturatedOilGasDissolutionFactor="0"
+VtkWriteSaturationRatios="0"
+VtkWriteSaturations="1"
+VtkWriteTemperature="1"
+VtkWriteTotalMassFractions="0"
+VtkWriteTotalMoleFractions="0"
+VtkWriteTracerConcentration="0"
+VtkWriteViscosities="0"
+VtkWriteWaterFormationVolumeFactor="0"
+WaterOnlyThreshold="1"
+WellGroupConstraintsMaxIterations="1"
+ZoltanImbalanceTol="1.1"
+ZoltanParams="graph"
+ZoltanPhgEdgeSizeThreshold="0.35"
+
+Reading deck file '../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA'
+    0 Reading RUNSPEC  in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 1
+    1 Reading TITLE    in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 3
+    2 Reading DIMENS   in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 6
+    3 Reading OIL      in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 9
+    4 Reading WATER    in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 10
+    5 Reading GAS      in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 11
+    6 Reading METRIC   in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 13
+    7 Reading START    in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 15
+    8 Reading TABDIMS  in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 18
+    9 Reading WELLDIMS in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 21
+   10 Reading UNIFOUT  in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 24
+   11 Reading GRID     in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 26
+   12 Reading DXV      in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 28
+   13 Reading DYV      in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 31
+   14 Reading DZV      in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 34
+   15 Reading TOPS     in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 37
+   16 Reading PORO     in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 40
+   17 Reading PERMX    in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 43
+   18 Reading PERMY    in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 46
+   19 Reading PERMZ    in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 49
+   20 Reading FLUXREG  in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 52
+   21 Reading FLUXTYPE in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 55
+   22 Reading DUMPFLUX in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 58
+   23 Reading PROPS    in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 61
+   24 Reading DENSITY  in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 63
+   25 Reading PVTW     in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 66
+   26 Reading PVDO     in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 69
+   27 Reading PVDG     in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 74
+   28 Reading SWOF     in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 80
+   29 Reading SGOF     in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 87
+   30 Reading SOLUTION in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 94
+   31 Reading PRESSURE in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 96
+   32 Reading SWAT     in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 99
+   33 Reading SGAS     in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 102
+   34 Reading SUMMARY  in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 105
+   35 Reading ALL      in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 107
+   36 Reading PERFORMA in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 108
+   37 Reading SCHEDULE in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 110
+   38 Reading RPTRST   in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 112
+   39 Reading GRUPTREE in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 115
+   40 Reading WELSPECS in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 119
+   41 Reading COMPDAT  in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 123
+   42 Reading WCONPROD in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 127
+   43 Reading GCONPROD in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 131
+   44 Reading TSTEP    in ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 135
+Unsupported keywords or keyword items:
+
+  TABDIMS: invalid value '1' for item 14
+  In file: ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA, line 18
+  TABDIMS(MXNPMR): should be equal to 0 - ignored as not used
+
+  TABDIMS: invalid value '1' for item 15
+  In file: ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA, line 18
+  TABDIMS(NTABKT): should be defaulted (0) – ignored as not used
+
+Creating grid from keywords DX, DY, DZ and TOPS
+3 fluid phases are active
+
+Processing dynamic information from
+../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 110
+Initializing report step 0/6 at 2020-01-01 0 DAYS line 110
+Processing keyword RPTRST at line 112
+Processing keyword GRUPTREE at line 115
+Processing keyword WELSPECS at line 119
+Processing keyword COMPDAT at line 123
+Processing keyword WCONPROD at line 127
+Processing keyword GCONPROD at line 131
+Complete report step 1 (5 DAYS) at 2020-01-06 (0 DAYS)
+
+Initializing report step 2/6 at 2020-01-06 (0 DAYS) line 135
+Complete report step 2 (5 DAYS) at 2020-01-11 (5 DAYS)
+
+Initializing report step 3/6 at 2020-01-11 (5 DAYS) line 135
+Complete report step 3 (5 DAYS) at 2020-01-16 (10 DAYS)
+
+Initializing report step 4/6 at 2020-01-16 (10 DAYS) line 135
+Complete report step 4 (5 DAYS) at 2020-01-21 (15 DAYS)
+
+Initializing report step 5/6 at 2020-01-21 (15 DAYS) line 135
+Complete report step 5 (5 DAYS) at 2020-01-26 (20 DAYS)
+Report limit reached, see PRT-file for remaining Schedule initialization.
+
+Initializing report step 6/6 at 2020-01-26 (20 DAYS) line 135
+Complete report step 6 (5 DAYS) at 2020-01-31 (25 DAYS)
+
+
+Processing grid
+Total number of active cells: 11 / total pore volume: 275000 RM3
+
+Property tree for linear solvers:
+{
+    "maxiter": "20",
+    "tol": "0.0050000000000000001",
+    "verbosity": "0",
+    "solver": "bicgstab",
+    "preconditioner": {
+        "type": "cprw",
+        "use_well_weights": "false",
+        "add_wells": "true",
+        "weight_type": "trueimpes",
+        "pre_smooth": "0",
+        "post_smooth": "1",
+        "finesmoother": {
+            "type": "paroverilu0",
+            "relaxation": "1"
+        },
+        "verbosity": "0",
+        "coarsesolver": {
+            "maxiter": "1",
+            "tol": "0.10000000000000001",
+            "solver": "loopsolver",
+            "verbosity": "0",
+            "preconditioner": {
+                "type": "amg",
+                "alpha": "0.33333333333300003",
+                "relaxation": "1",
+                "iterations": "1",
+                "coarsenTarget": "1200",
+                "pre_smooth": "1",
+                "post_smooth": "1",
+                "beta": "0",
+                "smoother": "ilu0",
+                "verbosity": "0",
+                "maxlevel": "15",
+                "skip_isolated": "0",
+                "accumulate": "1",
+                "prolongationdamping": "1",
+                "maxdistance": "2",
+                "maxconnectivity": "15",
+                "maxaggsize": "6",
+                "minaggsize": "4"
+            }
+        }
+    }
+}
+
+Unhandled summary keyword ALL/FAQR
+In ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 107
+Unhandled summary keyword ALL/FAQRG
+In ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 107
+Unhandled summary keyword ALL/FAQT
+In ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 107
+Unhandled summary keyword ALL/FAQTG
+In ../tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA line 107
+DUMPFLUX bootstrap: initialized 1 region dumper(s) from FLUXREG
+
+
+================ Starting main simulation loop ===============
+
+
+
+---------------    Simulation step number 0    ---------------
+      Current time (days)     0
+      Current stepsize (days) 5
+      Total time (days)       30
+
+
+
+Report step  0/6 at day 0/30, date = 01-Jan-2020
+Using Newton nonlinear solver.
+
+Starting time step 0, stepsize 1 days, at day 0/5, date = 01-Jan-2020
+Restart file written for report step 0/6, date = 01-Jan-2020 00:00:00
+   Well P1 converged in 1 inner iterations (0 control/status switches).
+   Well P1 converged in 2 inner iterations (1 control/status switches).
+    Well P1 switched from ORAT to GRUP during local solve
+Iter    MB(O)      MB(W)      MB(G)      CNV(O)     CNV(W)     CNV(G)    MBFLAG  CNVFLAG
+   0  2.000e-04  4.762e-05  0.000e+00  2.200e-03  5.238e-04  0.000e+00   Strict   Strict
+Linear system blocksize: 3 size:      11 block nonzeroes:        31
+   1  1.742e-08  6.682e-10  0.000e+00  7.584e-07  2.947e-07  0.000e+00   Strict   Strict
+   2  2.004e-10  5.918e-11  0.000e+00  8.436e-10  1.341e-09  0.000e+00   Strict   Strict
+Overall linear iterations used: 0
+    Well P1 control mode changed from ORAT to GRUP
+   Well P1 converged in 1 inner iterations (0 control/status switches).
+Suggested next time step size (from PID controller): 16.920695370505744 days
+Suggested next time step size (from iteration target): 3.400000000000001 days
+ Newton its= 2, linearizations= 3 (0.0sec), linear its=  0 (0.0sec)
+
+Starting time step 1, stepsize 2 days, at day 1/5, date = 02-Jan-2020
+Iter    MB(O)      MB(W)      MB(G)      CNV(O)     CNV(W)     CNV(G)    MBFLAG  CNVFLAG
+   0  4.001e-04  9.509e-05  0.000e+00  8.658e-04  2.054e-04  0.000e+00   Strict   Strict
+   1  5.709e-08  2.900e-08  0.000e+00  1.433e-06  1.646e-07  0.000e+00   Strict   Strict
+   2  2.516e-10  7.772e-11  0.000e+00  3.588e-10  2.900e-10  0.000e+00   Strict   Strict
+Overall linear iterations used: 0
+   Well P1 converged in 1 inner iterations (0 control/status switches).
+Suggested next time step size (from PID controller): 8.869806075498477 days
+Suggested next time step size (from iteration target): 6.800000000000002 days
+ Newton its= 2, linearizations= 3 (0.0sec), linear its=  0 (0.0sec)
+
+Starting time step 2, stepsize 2 days, at day 3/5, date = 04-Jan-2020
+Iter    MB(O)      MB(W)      MB(G)      CNV(O)     CNV(W)     CNV(G)    MBFLAG  CNVFLAG
+   0  4.004e-04  9.493e-05  0.000e+00  4.592e-04  1.084e-04  0.000e+00   Strict   Strict
+   1  3.604e-08  6.722e-09  0.000e+00  1.461e-06  3.130e-07  0.000e+00   Strict   Strict
+   2  5.720e-14  2.184e-14  0.000e+00  6.349e-14  3.049e-14  0.000e+00   Strict   Strict
+Overall linear iterations used: 0
+   Well P1 converged in 1 inner iterations (0 control/status switches).
+Suggested next time step size (from PID controller): 11.067547985889139 days
+Suggested next time step size (from iteration target): 6.800000000000002 days
+ Newton its= 2, linearizations= 3 (0.0sec), linear its=  0 (0.0sec)
+Sub steps started at time = 0 (days)
+ step[ 0 ] = 1 (days)
+ step[ 1 ] = 2 (days)
+ step[ 2 ] = 2 (days)
+sub steps end time = 5 (days)
+Suggested next step size = 6 (days)
+
+Time step took 0.078022 seconds; total solver time 0.078022 seconds.
+
+
+
+---------------    Simulation step number 1    ---------------
+      Current time (days)     5
+      Current stepsize (days) 5
+      Total time (days)       30
+
+
+
+Report step  1/6 at day 5/30, date = 06-Jan-2020
+
+Starting time step 0, stepsize 5 days, at day 5/10, date = 06-Jan-2020
+Iter    MB(O)      MB(W)      MB(G)      CNV(O)     CNV(W)     CNV(G)    MBFLAG  CNVFLAG
+   0  1.002e-03  2.370e-04  0.000e+00  1.027e-03  2.419e-04  0.000e+00   Strict   Strict
+   1  3.267e-07  1.825e-08  0.000e+00  8.385e-06  1.860e-06  0.000e+00   Strict   Strict
+   2  3.804e-11  1.679e-11  0.000e+00  4.008e-11  1.820e-11  0.000e+00   Strict   Strict
+Overall linear iterations used: 0
+   Well P1 converged in 1 inner iterations (0 control/status switches).
+Restart file written for report step 1/6, date = 06-Jan-2020 00:00:00
+Suggested next time step size (from PID controller): 16.9311924025251 days
+Suggested next time step size (from iteration target): 17.000000000000004 days
+ Newton its= 2, linearizations= 3 (0.0sec), linear its=  0 (0.0sec)
+Sub steps started at time = 5 (days)
+ step[ 0 ] = 5 (days)
+sub steps end time = 10 (days)
+Suggested next step size = 15 (days)
+
+Time step took 0.009358 seconds; total solver time 0.087380 seconds.
+
+
+
+---------------    Simulation step number 2    ---------------
+      Current time (days)     10
+      Current stepsize (days) 5
+      Total time (days)       30
+
+
+
+Report step  2/6 at day 10/30, date = 11-Jan-2020
+
+Starting time step 0, stepsize 5 days, at day 10/15, date = 11-Jan-2020
+Iter    MB(O)      MB(W)      MB(G)      CNV(O)     CNV(W)     CNV(G)    MBFLAG  CNVFLAG
+   0  1.003e-03  2.361e-04  0.000e+00  1.006e-03  2.363e-04  0.000e+00   Strict   Strict
+   1  3.438e-07  1.386e-08  0.000e+00  8.350e-06  1.861e-06  0.000e+00   Strict   Strict
+Restart file written for report step 2/6, date = 11-Jan-2020 00:00:00
+   2  6.989e-11  3.138e-11  0.000e+00  7.311e-11  3.207e-11  0.000e+00   Strict   Strict
+Overall linear iterations used: 0
+   Well P1 converged in 1 inner iterations (0 control/status switches).
+Suggested next time step size (from PID controller): 20.118510038130008 days
+Suggested next time step size (from iteration target): 17.000000000000004 days
+ Newton its= 2, linearizations= 3 (0.0sec), linear its=  0 (0.0sec)
+Sub steps started at time = 10 (days)
+ step[ 0 ] = 5 (days)
+sub steps end time = 15 (days)
+Suggested next step size = 15 (days)
+
+Time step took 0.011447 seconds; total solver time 0.098827 seconds.
+
+
+
+---------------    Simulation step number 3    ---------------
+      Current time (days)     15
+      Current stepsize (days) 5
+      Total time (days)       30
+
+
+
+Report step  3/6 at day 15/30, date = 16-Jan-2020
+
+Starting time step 0, stepsize 5 days, at day 15/20, date = 16-Jan-2020
+Iter    MB(O)      MB(W)      MB(G)      CNV(O)     CNV(W)     CNV(G)    MBFLAG  CNVFLAG
+   0  1.005e-03  2.353e-04  0.000e+00  1.006e-03  2.356e-04  0.000e+00   Strict   Strict
+   1  3.442e-07  1.343e-08  0.000e+00  8.318e-06  1.846e-06  0.000e+00   Strict   Strict
+   1  3.442e-07  1.343e-08  0.000e+00  8.318e-06  1.846e-06  0.000e+00   Strict   Strict
+Restart file written for report step 3/6, date = 16-Jan-2020 00:00:00
+   2  7.163e-11  3.208e-11  0.000e+00  7.507e-11  3.285e-11  0.000e+00   Strict   Strict
+Overall linear iterations used: 0
+   Well P1 converged in 1 inner iterations (0 control/status switches).
+Suggested next time step size (from PID controller): 19.718344946118552 days
+Suggested next time step size (from iteration target): 17.000000000000004 days
+ Newton its= 2, linearizations= 3 (0.0sec), linear its=  0 (0.0sec)
+Sub steps started at time = 15 (days)
+ step[ 0 ] = 5 (days)
+sub steps end time = 20 (days)
+Suggested next step size = 15 (days)
+
+Time step took 0.011922 seconds; total solver time 0.110749 seconds.
+
+
+
+---------------    Simulation step number 4    ---------------
+      Current time (days)     20
+      Current stepsize (days) 5
+      Total time (days)       30
+
+
+
+Report step  4/6 at day 20/30, date = 21-Jan-2020
+
+Starting time step 0, stepsize 5 days, at day 20/25, date = 21-Jan-2020
+Iter    MB(O)      MB(W)      MB(G)      CNV(O)     CNV(W)     CNV(G)    MBFLAG  CNVFLAG
+   0  1.006e-03  2.345e-04  0.000e+00  1.007e-03  2.348e-04  0.000e+00   Strict   Strict
+   1  3.432e-07  1.333e-08  0.000e+00  8.285e-06  1.830e-06  0.000e+00   Strict   Strict
+   2  7.100e-11  3.167e-11  0.000e+00  7.443e-11  3.245e-11  0.000e+00   Strict   Strict
+   2  7.100e-11  3.167e-11  0.000e+00  7.443e-11  3.245e-11  0.000e+00   Strict   Strict
+Restart file written for report step 4/6, date = 21-Jan-2020 00:00:00
+Overall linear iterations used: 0
+   Well P1 converged in 1 inner iterations (0 control/status switches).
+Suggested next time step size (from PID controller): 19.683321984526472 days
+Suggested next time step size (from iteration target): 17.000000000000004 days
+ Newton its= 2, linearizations= 3 (0.0sec), linear its=  0 (0.0sec)
+Sub steps started at time = 20 (days)
+ step[ 0 ] = 5 (days)
+sub steps end time = 25 (days)
+Suggested next step size = 15 (days)
+
+Time step took 0.011075 seconds; total solver time 0.121824 seconds.
+
+
+
+---------------    Simulation step number 5    ---------------
+      Current time (days)     25
+      Current stepsize (days) 5
+      Total time (days)       30
+
+
+
+Report step  5/6 at day 25/30, date = 26-Jan-2020
+
+Starting time step 0, stepsize 5 days, at day 25/30, date = 26-Jan-2020
+Iter    MB(O)      MB(W)      MB(G)      CNV(O)     CNV(W)     CNV(G)    MBFLAG  CNVFLAG
+   0  1.008e-03  2.337e-04  0.000e+00  1.008e-03  2.340e-04  0.000e+00   Strict   Strict
+   1  3.421e-07  1.326e-08  0.000e+00  8.253e-06  1.813e-06  0.000e+00   Strict   Strict
+   2  7.018e-11  3.117e-11  0.000e+00  7.357e-11  3.194e-11  0.000e+00   Strict   Strict
+   2  7.018e-11  3.117e-11  0.000e+00  7.357e-11  3.194e-11  0.000e+00   Strict   Strict
+Restart file written for report step 5/6, date = 26-Jan-2020 00:00:00
+Overall linear iterations used: 0
+   Well P1 converged in 1 inner iterations (0 control/status switches).
+Suggested next time step size (from PID controller): 19.648097314581722 days
+Suggested next time step size (from iteration target): 17.000000000000004 days
+ Newton its= 2, linearizations= 3 (0.0sec), linear its=  0 (0.0sec)
+Sub steps started at time = 25 (days)
+ step[ 0 ] = 5 (days)
+sub steps end time = 30 (days)
+Suggested next step size = 15 (days)
+
+Time step took 0.010532 seconds; total solver time 0.132356 seconds.
+
+Restart file written for report step 6/6, date = 31-Jan-2020 00:00:00
+
+
+================    End of simulation     ===============
+
+Number of MPI processes:         1
+Threads per MPI process:         2
+Setup time:                      0.18 s
+  Deck input:                    0.14 s
+Number of timesteps:             8
+Simulation time:                 0.13 s
+  Assembly time:                 0.01 s (Wasted: 0.0 s; 0.0%)
+    Well assembly:               0.01 s (Wasted: 0.0 s; 0.0%)
+  Linear solve time:             0.05 s (Wasted: 0.0 s; 0.0%)
+    Linear setup:                0.04 s (Wasted: 0.0 s; 0.0%)
+  Props/update time:             0.01 s (Wasted: 0.0 s; 0.0%)
+  Pre/post step:                 0.02 s (Wasted: 0.0 s; 0.0%)
+  Output write time:             0.04 s
+Overall Linearizations:         24      (Wasted:     0; 0.0%)
+Overall Newton Iterations:      16      (Wasted:     0; 0.0%)
+Overall Linear Iterations:       0      (Wasted:     0; 0.0%)
+
+
+
+Error summary:
+Warnings          5
+Info              106
+Errors            0
+Bugs              0
+Debug             86
+Problems          0
+

@@ -98,6 +98,26 @@ BOOST_AUTO_TEST_CASE(ActivatesOnlyTheSelectedFluxnumRegion)
     BOOST_CHECK_EQUAL(actnum[0], 1);
     BOOST_CHECK_EQUAL(actnum[1], 0);
     BOOST_CHECK_EQUAL(actnum[2], 1);
+
+    const auto& gridActnum = eclipseState.getInputGrid().getACTNUM();
+    BOOST_REQUIRE_EQUAL(gridActnum.size(), 3U);
+    BOOST_CHECK_EQUAL(gridActnum[0], 1);
+    BOOST_CHECK_EQUAL(gridActnum[1], 0);
+    BOOST_CHECK_EQUAL(gridActnum[2], 1);
+}
+
+BOOST_AUTO_TEST_CASE(DoesNotReactivatePreviouslyInactiveCells)
+{
+    auto deck = makeDeck("ACTNUM\n 1 0 1 /\nFLUXNUM\n 1 1 1 /\nUSEFLUX /\n");
+    Opm::EclipseState eclipseState(deck);
+
+    BOOST_CHECK(Opm::applyUseFluxActnum(eclipseState));
+
+    const auto actnum = eclipseState.fieldProps().actnum();
+    BOOST_REQUIRE_EQUAL(actnum.size(), 3U);
+    BOOST_CHECK_EQUAL(actnum[0], 1);
+    BOOST_CHECK_EQUAL(actnum[1], 0);
+    BOOST_CHECK_EQUAL(actnum[2], 1);
 }
 
 BOOST_AUTO_TEST_CASE(RejectsUseFluxWithoutFluxnum)
@@ -106,6 +126,20 @@ BOOST_AUTO_TEST_CASE(RejectsUseFluxWithoutFluxnum)
     Opm::EclipseState eclipseState(deck);
 
     BOOST_CHECK_THROW(Opm::applyUseFluxActnum(eclipseState), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(ActivatesFromFluxregWhenFluxnumMissing)
+{
+    auto deck = makeDeck("FLUXREG\n 1 0 1 /\nUSEFLUX /\n");
+    Opm::EclipseState eclipseState(deck);
+
+    BOOST_CHECK(Opm::applyUseFluxActnum(eclipseState));
+
+    const auto actnum = eclipseState.fieldProps().actnum();
+    BOOST_REQUIRE_EQUAL(actnum.size(), 3U);
+    BOOST_CHECK_EQUAL(actnum[0], 1);
+    BOOST_CHECK_EQUAL(actnum[1], 0);
+    BOOST_CHECK_EQUAL(actnum[2], 1);
 }
 
 BOOST_AUTO_TEST_CASE(RejectsAmbiguousFluxnumSelection)

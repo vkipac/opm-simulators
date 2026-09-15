@@ -28,6 +28,15 @@ if (BUILD_FLOW)
       opmcommon
   )
 
+  opm_add_executable(
+    TARGET
+      sector_vs_parent_compare
+    SOURCES
+      tests/flux/sector_vs_parent_compare.cpp
+    LIBRARIES
+      opmcommon
+  )
+
   set(_flux_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_dump_smoke)
 
   opm_add_test(flux_dump_smoke
@@ -184,6 +193,20 @@ if (BUILD_FLOW)
         -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-equivalence-smoke.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_PSECTOR_SMOKE.DATA FLUX_DUMP_PSECTOR_SMOKE pressure inline:box,8,8,3,22,13,3 --compare-arg=--ignore-times"
   )
 
+  set(_sector_vs_parent_pressure_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+sector_vs_parent_pressure_smoke)
+
+  opm_add_test(sector_vs_parent_pressure_smoke
+    DEPENDS
+      sector_vs_parent_compare
+    EXE_TARGET
+      flow_blackoil
+    DRIVER_ARGS
+      -i ${PROJECT_SOURCE_DIR}/tests/data/sector
+      -r ${_sector_vs_parent_pressure_result_path}
+      -f BASE_DUMPFLUX_FLORES
+      -p "bash ${PROJECT_SOURCE_DIR}/tests/check-sector-vs-parent-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/sector_vs_parent_compare ${PROJECT_SOURCE_DIR}/tests/data/sector/BASE_SECTOR_PRES.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/BASE_SECTOR.MAP"
+  )
+
   set(_useflux_pressure_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+useflux_pressure_smoke)
 
   opm_add_test(useflux_pressure_smoke
@@ -211,6 +234,43 @@ if (BUILD_FLOW)
       -f FLUX_DUMP_USEFLUX_FLUX_SMOKE
       -p "bash ${PROJECT_SOURCE_DIR}/tests/check-useflux-flux-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_FLUX_SMOKE.DATA"
   )
+
+  # compareECL is built and shipped by opm-common, not by opm-simulators.
+  find_program(OPM_COMPARE_ECL_BIN
+    NAMES compareECL
+    HINTS ${PROJECT_SOURCE_DIR}/../opm-common/build/bin
+          ${CMAKE_INSTALL_PREFIX}/bin
+    PATH_SUFFIXES bin)
+
+  if(OPM_COMPARE_ECL_BIN)
+    set(_onewell_useflux_pressure_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+onewell_useflux_pressure_smoke)
+
+    opm_add_test(onewell_useflux_pressure_smoke
+      DEPENDS
+        flux_smoke_shape_check
+      EXE_TARGET
+        flow_blackoil
+      DRIVER_ARGS
+        -i ${PROJECT_SOURCE_DIR}/tests/data/sector
+        -r ${_onewell_useflux_pressure_result_path}
+        -f ONEWELL_DUMPFLUX_PRESSURE_1D
+        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-onewell-useflux-pressure-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_COMPARE_ECL_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/ONEWELL_DUMPFLUX_PRESSURE_1D.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/ONEWELL_USEFLUX_PRESSURE_1D.DATA"
+    )
+
+    set(_onewell_useflux_flux_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+onewell_useflux_flux_smoke)
+
+    opm_add_test(onewell_useflux_flux_smoke
+      DEPENDS
+        flux_smoke_shape_check
+      EXE_TARGET
+        flow_blackoil
+      DRIVER_ARGS
+        -i ${PROJECT_SOURCE_DIR}/tests/data/sector
+        -r ${_onewell_useflux_flux_result_path}
+        -f ONEWELL_DUMPFLUX_FLUX_1D
+        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-onewell-useflux-flux-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_COMPARE_ECL_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/ONEWELL_DUMPFLUX_FLUX_1D.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/ONEWELL_USEFLUX_FLUX_1D.DATA"
+    )
+  endif()
 
   set(_useflux_both_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+useflux_both_smoke)
 

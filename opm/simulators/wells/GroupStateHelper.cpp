@@ -913,7 +913,8 @@ GroupStateHelper<Scalar, IndexTraits>::getWellGroupTargetProducer(const std::str
         guide_rate_fraction = (well_guide_rate / group_guide_rate);
     }
     // Avoid negative target rates coming from too large local reductions.
-    return GroupTarget{group.name(), std::max(Scalar(0.0), target / efficiency_factor),
+    const Scalar well_target = std::max(Scalar(0.0), target / efficiency_factor);
+    return GroupTarget{group.name(), well_target,
                        target_group_cmode, Group::InjectionCMode::NONE, guide_rate_fraction};
 }
 

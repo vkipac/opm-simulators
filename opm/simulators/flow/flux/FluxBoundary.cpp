@@ -142,22 +142,9 @@ const EclIO::FluxFile::ReportStep* FluxBoundary::selectReportStep(const EclIO::F
         return nullptr;
     }
 
-    const auto byReportStep = static_cast<int>(std::count_if(data.reportSteps.begin(),
-                                                              data.reportSteps.end(),
-                                                              [episodeIndex](const auto& step)
-                                                              {
-                                                                  return step.reportStep == episodeIndex;
-                                                              }));
-    if (byReportStep > 0) {
-        const auto it = std::find_if(data.reportSteps.begin(),
-                                     data.reportSteps.end(),
-                                     [episodeIndex](const auto& step)
-                                     {
-                                         return step.reportStep == episodeIndex;
-                                     });
-        return &(*it);
-    }
-
+    // The producer appends a report step using reportStepNum = episodeIndex + 1,
+    // and the stored rates are averaged over that episode. A consumer running
+    // episode e therefore has to use the entry with reportStep == e + 1.
     const auto byOneBased = episodeIndex + 1;
     const auto byOneBasedCount = static_cast<int>(std::count_if(data.reportSteps.begin(),
                                                                  data.reportSteps.end(),
@@ -171,6 +158,22 @@ const EclIO::FluxFile::ReportStep* FluxBoundary::selectReportStep(const EclIO::F
                                      [byOneBased](const auto& step)
                                      {
                                          return step.reportStep == byOneBased;
+                                     });
+        return &(*it);
+    }
+
+    const auto byReportStep = static_cast<int>(std::count_if(data.reportSteps.begin(),
+                                                              data.reportSteps.end(),
+                                                              [episodeIndex](const auto& step)
+                                                              {
+                                                                  return step.reportStep == episodeIndex;
+                                                              }));
+    if (byReportStep > 0) {
+        const auto it = std::find_if(data.reportSteps.begin(),
+                                     data.reportSteps.end(),
+                                     [episodeIndex](const auto& step)
+                                     {
+                                         return step.reportStep == episodeIndex;
                                      });
         return &(*it);
     }

@@ -63,6 +63,7 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
@@ -500,6 +501,18 @@ public:
         OPM_TIMEBLOCK(writeOutput);
 
         const int reportStepNum = simulator_.episodeIndex() + 1;
+
+        // DUMPFLUX samples the FLORES buffers, which are only allocated when the
+        // local cell data is prepared for a restart-writing (non-substep)
+        // output. If the cached data was prepared during a substep those buffers
+        // are missing, so force a refresh before they are needed.
+        if (! isSubStep && ! this->fluxDumpers_.empty()
+            && this->outputModule_->getFlows().anyFlores()
+            && ! this->outputModule_->getFlows().hasFlores())
+        {
+            this->outputModule_->invalidateLocalData();
+        }
+
         this->prepareLocalCellData(isSubStep, reportStepNum);
         this->outputModule_->outputErrorLog(simulator_.gridView().comm());
 
@@ -516,6 +529,12 @@ public:
 
         const bool isFloresn = this->outputModule_->getFlows().hasFloresn();
         auto floresn = this->outputModule_->getFlows().getFloresn();
+
+        // assignToSolution() moves the FLORES buffers into the restart solution,
+        // so DUMPFLUX has to sample its boundary faces before that happens.
+        if (! isSubStep) {
+            this->captureFluxDumperFlores_();
+        }
 
         if (! isSubStep || Parameters::Get<Parameters::EnableWriteAllSolutions>()) {
 
@@ -801,6 +820,9 @@ private:
     { return simulator_.vanguard().eclState(); }
 
     SummaryState& summaryState()
+    { return simulator_.vanguard().summaryState(); }
+
+    const SummaryState& summaryState() const
     { return simulator_.vanguard().summaryState(); }
 
     Action::State& actionState()
@@ -1120,6 +1142,75 @@ private:
                      + " region dumper(s) from FLUXREG");
     }
 
+    // The FLORES buffers owned by the output module are moved into the restart
+    // solution by assignToSolution(). DUMPFLUX therefore has to sample the
+    // Cartesian boundary-face values before that happens.
+    void captureFluxDumperFlores_()
+    {
+        this->fluxCapturedFaceRates_.clear();
+
+        if (this->fluxDumpers_.empty() || !this->collectOnIORank_.isIORank()) {
+            return;
+        }
+
+        const auto& flows = this->outputModule_->getFlows();
+        if (!flows.hasFlores()) {
+            return;
+        }
+
+        this->fluxCapturedFaceRates_.reserve(this->fluxDumpers_.size());
+        for (const auto& dumper : this->fluxDumpers_) {
+            this->fluxCapturedFaceRates_.push_back(
+                dumper.makeFaceMajorRates(
+                    [&flows, this](const FluxRegions::BoundaryFace& face,
+                                   const EclIO::FluxFile::Phase phase)
+                    {
+                        if (face.isNnc || face.direction == FaceDir::Unknown) {
+                            return 0.0;
+                        }
+
+                        const auto comp = this->fluxComponentIndex_(phase);
+
+                        // FLORES is stored per cell for the positive face
+                        // directions only, and is oriented along the positive
+                        // axis. The FLUX file convention is positive into the
+                        // sector.
+                        //
+                        // For a boundary face on a positive direction the
+                        // interior cell holds the value and the orientation has
+                        // to be flipped. For a boundary face on a negative
+                        // direction the value lives on the exterior cell's
+                        // positive face and already points into the sector.
+                        switch (face.direction) {
+                        case FaceDir::XPlus:
+                        case FaceDir::YPlus:
+                        case FaceDir::ZPlus:
+                            return -flows.getFloresIfAvailable(face.interiorGlobalCell,
+                                                               face.direction,
+                                                               comp);
+
+                        case FaceDir::XMinus:
+                            return flows.getFloresIfAvailable(face.exteriorGlobalCell,
+                                                              FaceDir::XPlus,
+                                                              comp);
+
+                        case FaceDir::YMinus:
+                            return flows.getFloresIfAvailable(face.exteriorGlobalCell,
+                                                              FaceDir::YPlus,
+                                                              comp);
+
+                        case FaceDir::ZMinus:
+                            return flows.getFloresIfAvailable(face.exteriorGlobalCell,
+                                                              FaceDir::ZPlus,
+                                                              comp);
+
+                        default:
+                            return 0.0;
+                        }
+                    }));
+        }
+    }
+
     void updateFluxDumpers_(const int reportStepNum, const bool isSubStep)
     {
         if (isSubStep || this->fluxDumpers_.empty()) {
@@ -1139,49 +1230,81 @@ private:
                ? FluidSystem::gasPhaseIdx
                : FluidSystem::waterPhaseIdx);
         const auto& vanguard = this->simulator_.vanguard();
+        const auto summaryKeys = this->fluxSummaryKeys_();
+        const auto summaryValues = this->fluxSummaryValues_(summaryKeys);
 
-        for (auto& dumper : this->fluxDumpers_) {
+        if (!flows.anyFlores() && !this->fluxMissingFloresReported_) {
+            const auto anyFluxMode =
+                std::any_of(this->fluxDumpers_.begin(), this->fluxDumpers_.end(),
+                            [](const auto& dumper)
+                            {
+                                return (static_cast<int>(dumper.data().header.mode)
+                                        & static_cast<int>(EclIO::FluxFile::Mode::Flux)) != 0;
+                            });
+
+            if (anyFluxMode) {
+                this->fluxMissingFloresReported_ = true;
+                OpmLog::warning("DUMPFLUX is writing FLUX-mode boundary rates, but no FLORES "
+                                "data is available. All boundary rates will be zero and a "
+                                "USEFLUX run will behave as a closed region. Add 'FLOWS' and "
+                                "'FLORES' to RPTRST in the DUMPFLUX deck.");
+            }
+        }
+
+        const bool haveCapturedRates =
+            this->fluxCapturedFaceRates_.size() == this->fluxDumpers_.size();
+
+        for (std::size_t dumperIdx = 0; dumperIdx < this->fluxDumpers_.size(); ++dumperIdx) {
+            auto& dumper = this->fluxDumpers_[dumperIdx];
+            dumper.setSummaryKeys(summaryKeys);
+            if (dumper.data().summaryKeys.size() != summaryKeys.size()) {
+                throw std::runtime_error("DUMPFLUX failed to register summary keys before append");
+            }
+
             auto step = dumper.makeZeroFluxStep(reportStepNum,
                                                 simStep,
                                                 startTime,
                                                 stepLength);
 
-            if (flows.hasFlores()) {
-                // flows.getFlores is oriented by the interior-cell face direction.
-                // FLUX file convention is positive into the sector, i.e. opposite sign.
-                step.rates = dumper.makeFaceMajorRates(
-                    [&flows, &floresn, this](const FluxRegions::BoundaryFace& face,
-                                             const EclIO::FluxFile::Phase phase)
+            if (haveCapturedRates) {
+                // Cartesian contributions were sampled before the FLORES buffers
+                // were moved into the restart solution.
+                step.rates = this->fluxCapturedFaceRates_[dumperIdx];
+
+                // NNC contributions are not affected by that move and are
+                // resolved here so the parallel gather has completed.
+                const auto nncRates = dumper.makeFaceMajorRates(
+                    [&floresn, this](const FluxRegions::BoundaryFace& face,
+                                     const EclIO::FluxFile::Phase phase)
                     {
-                        const auto comp = this->fluxComponentIndex_(phase);
-
-                        if (face.isNnc) {
-                            const auto key = normalizedNncPair_(face.interiorGlobalCell,
-                                                                face.exteriorGlobalCell);
-                            const auto it = this->fluxNncPairToIndex_.find(key);
-                            if (it == this->fluxNncPairToIndex_.end()) {
-                                return 0.0;
-                            }
-
-                            const auto nncIdx = static_cast<std::size_t>(it->second);
-                            if (nncIdx >= floresn[comp].values.size()) {
-                                return 0.0;
-                            }
-
-                            // For NNC values we assume the stored direction is cell1->cell2
-                            // of the normalized pair and flip sign if the interior is cell1.
-                            const auto nncFlux = floresn[comp].values[nncIdx];
-                            return (face.interiorGlobalCell == key.second)
-                                ? nncFlux
-                                : -nncFlux;
-                        }
-
-                        if (face.direction == FaceDir::Unknown) {
+                        if (!face.isNnc) {
                             return 0.0;
                         }
 
-                        return -flows.getFloresIfAvailable(face.interiorGlobalCell, face.direction, comp);
+                        const auto comp = this->fluxComponentIndex_(phase);
+                        const auto key = normalizedNncPair_(face.interiorGlobalCell,
+                                                            face.exteriorGlobalCell);
+                        const auto it = this->fluxNncPairToIndex_.find(key);
+                        if (it == this->fluxNncPairToIndex_.end()) {
+                            return 0.0;
+                        }
+
+                        const auto nncIdx = static_cast<std::size_t>(it->second);
+                        if (nncIdx >= floresn[comp].values.size()) {
+                            return 0.0;
+                        }
+
+                        // For NNC values we assume the stored direction is cell1->cell2
+                        // of the normalized pair and flip sign if the interior is cell1.
+                        const auto nncFlux = floresn[comp].values[nncIdx];
+                        return (face.interiorGlobalCell == key.second)
+                            ? nncFlux
+                            : -nncFlux;
                     });
+
+                for (std::size_t i = 0; i < step.rates.size(); ++i) {
+                    step.rates[i] += nncRates[i];
+                }
             }
 
             if ((static_cast<int>(dumper.data().header.mode) & static_cast<int>(EclIO::FluxFile::Mode::Pressure)) != 0) {
@@ -1232,6 +1355,13 @@ private:
                 }
             }
 
+            step.summaryValues = summaryValues;
+            if (step.summaryValues.size() != dumper.data().summaryKeys.size()) {
+                throw std::runtime_error("DUMPFLUX summary key/value size mismatch before append: keys="
+                                         + std::to_string(dumper.data().summaryKeys.size())
+                                         + " values=" + std::to_string(step.summaryValues.size()));
+            }
+
             dumper.appendReportStep(step);
         }
 
@@ -1246,6 +1376,31 @@ private:
         }
     }
 
+    std::vector<std::string> fluxSummaryKeys_() const
+    {
+        std::vector<std::string> keys;
+        const auto& summaryConfig = this->eclIO_->finalSummaryConfig();
+        keys.reserve(summaryConfig.size());
+
+        for (const auto& node : summaryConfig) {
+            keys.push_back(node.uniqueNodeKey());
+        }
+        return keys;
+    }
+
+    std::vector<double> fluxSummaryValues_(const std::vector<std::string>& keys) const
+    {
+        std::vector<double> values;
+        values.reserve(keys.size());
+
+        const auto& summaryState = this->summaryState();
+        for (const auto& key : keys) {
+            values.push_back(summaryState.get(key, summaryState.get_udq_undefined()));
+        }
+
+        return values;
+    }
+
     Simulator& simulator_;
     std::unique_ptr<OutputModule> outputModule_;
     Scalar restartTimeStepSize_;
@@ -1254,6 +1409,8 @@ private:
     std::vector<FluxDumper> fluxDumpers_;
     std::vector<std::string> fluxOutputPaths_;
     std::map<std::pair<int, int>, int> fluxNncPairToIndex_;
+    std::vector<std::vector<double>> fluxCapturedFaceRates_;
+    bool fluxMissingFloresReported_ = false;
 };
 
 } // namespace Opm

@@ -46,7 +46,10 @@
 
 #include <opm/output/eclipse/EclipseIO.hpp>
 
+#include <opm/input/eclipse/EclipseState/SummaryConfig/SummaryConfig.hpp>
+#include <opm/input/eclipse/Schedule/UDQ/UDQSet.hpp>
 #include <opm/input/eclipse/Units/Units.hpp>
+#include <opm/io/eclipse/SummaryNode.hpp>
 
 #include <opm/simulators/flow/ActionHandler.hpp>
 #include <opm/simulators/flow/FlowProblem.hpp>
@@ -74,6 +77,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace Opm {
@@ -288,12 +292,21 @@ public:
         auto& simulator = this->simulator();
 
         const int episodeIdx = simulator.episodeIndex();
-        const auto& schedule = simulator.vanguard().schedule();
+        auto& vanguard = simulator.vanguard();
+        const auto& schedule = vanguard.schedule();
+
+        if (episodeIdx >= 0) {
+            this->restoreFluxSummaryState_(episodeIdx);
+        }
 
         // Evaluate UDQ assign statements to make sure the settings are
         // available as UDA controls for the current report step.
         this->actionHandler_
-            .evalUDQAssignments(episodeIdx, simulator.vanguard().udqState());
+            .evalUDQAssignments(episodeIdx, vanguard.udqState());
+
+        if (episodeIdx >= 0) {
+            this->restoreFluxUdqState_(episodeIdx);
+        }
 
         if (episodeIdx >= 0) {
             const auto& oilVap = schedule[episodeIdx].oilvap();
@@ -308,6 +321,362 @@ public:
                 ConvectiveMixingModule::beginEpisode(simulator.vanguard().eclState(), schedule, episodeIdx,
                                                      this->moduleParams_.convectiveMixingModuleParam);
             }
+        }
+    }
+
+    void restoreFluxSummaryState_(const int episodeIdx)
+    {
+        const auto* fluxData = this->fluxBoundaryData_();
+        const auto* fluxStep = this->fluxBoundaryReportStep_();
+        if (!fluxData || !fluxStep || fluxData->summaryKeys.empty()) {
+            return;
+        }
+
+        if (fluxData->summaryKeys.size() != fluxStep->summaryValues.size()) {
+            throw std::runtime_error("USEFLUX FLUX summary payload is inconsistent");
+        }
+
+        auto& summaryState = this->simulator().vanguard().summaryState();
+        const auto& schedule = this->simulator().vanguard().schedule();
+        const auto stepIdx = static_cast<std::size_t>(episodeIdx);
+
+        std::unordered_map<std::string, double> parentValues;
+        parentValues.reserve(fluxData->summaryKeys.size());
+        for (std::size_t index = 0; index < fluxData->summaryKeys.size(); ++index) {
+            parentValues.emplace(fluxData->summaryKeys[index], fluxStep->summaryValues[index]);
+        }
+
+        const auto localWells = schedule.wellNames(stepIdx);
+
+        const auto localWellExists = [&schedule, episodeIdx](const std::string& wellName)
+        {
+            return (episodeIdx >= 0) && schedule.hasWell(wellName, static_cast<std::size_t>(episodeIdx));
+        };
+
+        for (std::size_t index = 0; index < fluxData->summaryKeys.size(); ++index) {
+            const auto& key = fluxData->summaryKeys[index];
+            const auto value = fluxStep->summaryValues[index];
+            const auto category = EclIO::SummaryNode::category_from_keyword(key);
+
+            const auto firstColon = key.find(':');
+            const auto secondColon = (firstColon == std::string::npos)
+                ? std::string::npos
+                : key.find(':', firstColon + 1);
+
+            // Keep sector-local well/control quantities in place; parent data is fallback.
+            if ((category == EclIO::SummaryNode::Category::Well
+                 || category == EclIO::SummaryNode::Category::Connection
+                 || category == EclIO::SummaryNode::Category::Completion
+                 || category == EclIO::SummaryNode::Category::Segment)
+                && firstColon != std::string::npos)
+            {
+                const auto wellName = key.substr(firstColon + 1,
+                    (secondColon == std::string::npos) ? std::string::npos : secondColon - firstColon - 1);
+                if (localWellExists(wellName) && summaryState.has(key)) {
+                    continue;
+                }
+            }
+
+            const auto keyword = (firstColon == std::string::npos)
+                ? key
+                : key.substr(0, firstColon);
+            const auto valueType = parseKeywordType(keyword);
+            const auto isTotal = valueType == SummaryConfigNode::Type::Total;
+
+            if (category == EclIO::SummaryNode::Category::Well && firstColon != std::string::npos) {
+                const auto& wellName = key.substr(firstColon + 1);
+                const auto previous = summaryState.get_well_var(wellName, keyword, 0.0);
+                summaryState.update_well_var(wellName, keyword, isTotal ? (value - previous) : value);
+            }
+            else if (category == EclIO::SummaryNode::Category::Group && firstColon != std::string::npos) {
+                const auto& groupName = key.substr(firstColon + 1);
+                const auto previous = summaryState.get_group_var(groupName, keyword, 0.0);
+                summaryState.update_group_var(groupName, keyword, valueType, isTotal ? (value - previous) : value);
+            }
+            else if ((category == EclIO::SummaryNode::Category::Connection
+                      || category == EclIO::SummaryNode::Category::Completion)
+                     && firstColon != std::string::npos
+                     && secondColon != std::string::npos)
+            {
+                const auto& wellName = key.substr(firstColon + 1, secondColon - firstColon - 1);
+                const auto number = static_cast<std::size_t>(std::stoul(key.substr(secondColon + 1)));
+                const auto previous = summaryState.get_conn_var(wellName, keyword, number, 0.0);
+                summaryState.update_conn_var(wellName, keyword, valueType, number,
+                                             isTotal ? (value - previous) : value);
+            }
+            else if (category == EclIO::SummaryNode::Category::Segment
+                     && firstColon != std::string::npos
+                     && secondColon != std::string::npos) {
+                const auto& wellName = key.substr(firstColon + 1, secondColon - firstColon - 1);
+                const auto segment = static_cast<std::size_t>(std::stoul(key.substr(secondColon + 1)));
+                const auto previous = summaryState.get_segment_var(wellName, keyword, segment, 0.0);
+                summaryState.update_segment_var(wellName, keyword, segment,
+                                                isTotal ? (value - previous) : value);
+            }
+            else {
+                summaryState.set(key, value);
+            }
+        }
+
+        const auto wellEquivalentKeyword = [](const std::string& aggregateKeyword)
+        {
+            if (aggregateKeyword.empty()) {
+                return std::string{};
+            }
+
+            if ((aggregateKeyword.front() != 'F') && (aggregateKeyword.front() != 'G')) {
+                return std::string{};
+            }
+
+            auto result = aggregateKeyword;
+            result.front() = 'W';
+            return result;
+        };
+
+        const auto wellBelongsToGroup = [&schedule, stepIdx](const std::string& wellName,
+                                                             const std::string& groupName)
+        {
+            if (groupName == "FIELD") {
+                return true;
+            }
+
+            if (!schedule.hasWell(wellName, stepIdx)) {
+                return false;
+            }
+
+            auto currentGroup = schedule.getWell(wellName, stepIdx).groupName();
+            while (!currentGroup.empty()) {
+                if (currentGroup == groupName) {
+                    return true;
+                }
+
+                if (!schedule.hasGroup(currentGroup, stepIdx)) {
+                    break;
+                }
+
+                const auto parentGroup = schedule.getGroup(currentGroup, stepIdx).flow_group();
+                if (!parentGroup.has_value()) {
+                    break;
+                }
+
+                currentGroup = *parentGroup;
+            }
+
+            return false;
+        };
+
+        for (const auto& aggregateKey : fluxData->summaryKeys) {
+            const auto category = EclIO::SummaryNode::category_from_keyword(aggregateKey);
+            if ((category != EclIO::SummaryNode::Category::Field)
+                && (category != EclIO::SummaryNode::Category::Group)) {
+                continue;
+            }
+
+            const auto firstColon = aggregateKey.find(':');
+            const auto aggregateKeyword = (firstColon == std::string::npos)
+                ? aggregateKey
+                : aggregateKey.substr(0, firstColon);
+            const auto groupName = (firstColon == std::string::npos)
+                ? std::string{"FIELD"}
+                : aggregateKey.substr(firstColon + 1);
+
+            const auto parentAggregateIt = parentValues.find(aggregateKey);
+            if (parentAggregateIt == parentValues.end()) {
+                continue;
+            }
+
+            const auto wellKeyword = wellEquivalentKeyword(aggregateKeyword);
+            if (wellKeyword.empty()) {
+                continue;
+            }
+
+            double correctedValue = 0.0;
+            bool hasContribution = false;
+
+            for (const auto& wellName : localWells) {
+                if ((category == EclIO::SummaryNode::Category::Group)
+                    && !wellBelongsToGroup(wellName, groupName)) {
+                    continue;
+                }
+
+                const auto wellKey = wellKeyword + ":" + wellName;
+                const auto parentWellIt = parentValues.find(wellKey);
+                if ((parentWellIt == parentValues.end()) && !summaryState.has(wellKey)) {
+                    continue;
+                }
+
+                const auto value = summaryState.has(wellKey)
+                    ? summaryState.get(wellKey, summaryState.get_udq_undefined())
+                    : parentWellIt->second;
+
+                if (summaryState.is_undefined_value(value)) {
+                    continue;
+                }
+
+                correctedValue += value;
+                hasContribution = true;
+            }
+
+            if (hasContribution) {
+                summaryState.set(aggregateKey, correctedValue);
+            }
+            else {
+                summaryState.set(aggregateKey, parentAggregateIt->second);
+            }
+        }
+
+        (void)episodeIdx;
+    }
+
+    void restoreFluxUdqState_(const int episodeIdx)
+    {
+        const auto* fluxData = this->fluxBoundaryData_();
+        const auto* fluxStep = this->fluxBoundaryReportStep_();
+        if (!fluxData || !fluxStep || fluxData->summaryKeys.empty()) {
+            return;
+        }
+
+        if (fluxData->summaryKeys.size() != fluxStep->summaryValues.size()) {
+            throw std::runtime_error("USEFLUX FLUX summary payload is inconsistent");
+        }
+
+        auto& vanguard = this->simulator().vanguard();
+        auto& summaryState = vanguard.summaryState();
+        auto& udqState = vanguard.udqState();
+        const auto& schedule = vanguard.schedule();
+        const auto stepIdx = static_cast<std::size_t>(episodeIdx);
+
+        std::unordered_map<std::string, double> parentValues;
+        parentValues.reserve(fluxData->summaryKeys.size());
+        for (std::size_t index = 0; index < fluxData->summaryKeys.size(); ++index) {
+            parentValues.emplace(fluxData->summaryKeys[index], fluxStep->summaryValues[index]);
+        }
+
+        const auto localWells = schedule.wellNames(stepIdx);
+        const auto oilRateForWell = [&parentValues](const std::string& wellName)
+        {
+            const auto key = std::string{"WOPR:"} + wellName;
+            const auto parentIt = parentValues.find(key);
+            return (parentIt == parentValues.end()) ? std::numeric_limits<double>::quiet_NaN() : parentIt->second;
+        };
+
+        const auto wellBelongsToGroup = [&schedule, stepIdx](const std::string& wellName,
+                                                             const std::string& groupName)
+        {
+            if (groupName == "FIELD") {
+                return true;
+            }
+
+            if (!schedule.hasWell(wellName, stepIdx)) {
+                return false;
+            }
+
+            auto currentGroup = schedule.getWell(wellName, stepIdx).groupName();
+            while (!currentGroup.empty()) {
+                if (currentGroup == groupName) {
+                    return true;
+                }
+
+                if (!schedule.hasGroup(currentGroup, stepIdx)) {
+                    break;
+                }
+
+                const auto parentGroup = schedule.getGroup(currentGroup, stepIdx).flow_group();
+                if (!parentGroup.has_value()) {
+                    break;
+                }
+
+                currentGroup = *parentGroup;
+            }
+
+            return false;
+        };
+
+        double localFieldOil = 0.0;
+        for (const auto& wellName : localWells) {
+            const auto oil = oilRateForWell(wellName);
+            if (std::isfinite(oil)) {
+                localFieldOil += oil;
+            }
+        }
+
+        const auto parentFieldOilIt = parentValues.find("FOPR");
+        const bool haveParentFieldOil = (parentFieldOilIt != parentValues.end())
+            && std::isfinite(parentFieldOilIt->second);
+
+        // Some decks use FU* quantities for UDA targets without writing them to SMSPEC.
+        // Apply the field-level correction directly from the active UDQ state in that case.
+        if (haveParentFieldOil && udqState.has("FUPRODGO") && !parentValues.count("FUPRODGO")) {
+            const auto baseTarget = udqState.get("FUPRODGO");
+            const auto corrected = baseTarget - (parentFieldOilIt->second - localFieldOil);
+            if (std::isfinite(corrected)) {
+                udqState.add_assign("FUPRODGO", UDQSet::field("FUPRODGO", corrected));
+                summaryState.set("FUPRODGO", corrected);
+            }
+        }
+
+        for (const auto& [key, parentValue] : parentValues) {
+            const auto category = EclIO::SummaryNode::category_from_keyword(key);
+
+            if ((category == EclIO::SummaryNode::Category::Field)
+                && (key.size() >= 2)
+                && (key[0] == 'F')
+                && (key[1] == 'U')
+                && udqState.has(key)
+                && haveParentFieldOil)
+            {
+                const auto corrected = parentValue - (parentFieldOilIt->second - localFieldOil);
+                if (std::isfinite(corrected)) {
+                    udqState.add_assign(key, UDQSet::field(key, corrected));
+                    summaryState.set(key, corrected);
+                }
+            }
+
+            if (category != EclIO::SummaryNode::Category::Group) {
+                continue;
+            }
+
+            const auto firstColon = key.find(':');
+            if (firstColon == std::string::npos) {
+                continue;
+            }
+
+            const auto udqName = key.substr(0, firstColon);
+            const auto groupName = key.substr(firstColon + 1);
+            if ((udqName.size() < 2) || (udqName[0] != 'G') || (udqName[1] != 'U')) {
+                continue;
+            }
+
+            if (!udqState.has_group_var(groupName, udqName)) {
+                continue;
+            }
+
+            const auto parentGroupOilIt = parentValues.find("GOPR:" + groupName);
+            if ((parentGroupOilIt == parentValues.end()) || !std::isfinite(parentGroupOilIt->second)) {
+                continue;
+            }
+
+            double localGroupOil = 0.0;
+            for (const auto& wellName : localWells) {
+                if (!wellBelongsToGroup(wellName, groupName)) {
+                    continue;
+                }
+
+                const auto oil = oilRateForWell(wellName);
+                if (std::isfinite(oil)) {
+                    localGroupOil += oil;
+                }
+            }
+
+            const auto corrected = parentValue - (parentGroupOilIt->second - localGroupOil);
+            if (!std::isfinite(corrected)) {
+                continue;
+            }
+
+            auto singleGroupSet = UDQSet::groups(udqName, std::vector<std::string>{groupName});
+            singleGroupSet.assign(groupName, corrected);
+            udqState.add_assign(udqName, singleGroupSet);
+            summaryState.set(key, corrected);
         }
     }
 

@@ -25,6 +25,7 @@
 #include <opm/input/eclipse/Parser/ErrorGuard.hpp>
 #include <opm/input/eclipse/Parser/ParseContext.hpp>
 #include <opm/input/eclipse/Parser/Parser.hpp>
+#include <opm/input/eclipse/Schedule/Schedule.hpp>
 #include <opm/input/eclipse/Units/UnitSystem.hpp>
 #include <opm/io/eclipse/EclFile.hpp>
 #include <opm/io/eclipse/ERst.hpp>
@@ -43,6 +44,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -59,6 +62,7 @@ struct Options {
     std::string mode = "flux";
     std::string sampling = "averaged";
     std::string summary;
+    std::vector<std::string> udqSubstitutions;
     bool noSummary = false;
     bool help = false;
 };
@@ -77,6 +81,11 @@ struct SummaryPayload {
     std::vector<double> reportTimes;
 };
 
+struct RequiredSummaryFallback {
+    std::string missingKey;
+    std::vector<std::string> candidateKeys;
+};
+
 using NncKey = std::pair<int, int>;
 
 void printUsage()
@@ -88,6 +97,7 @@ void printUsage()
         << "  --mode=<flux|pressure|both>         Boundary payload mode (default: flux; flux requires FLORES restart arrays)\n"
         << "  --sampling=<averaged|instant>        Flux sampling mode (default: averaged)\n"
         << "  --summary=<CASE|CASE.SMSPEC>         Optional parent summary override\n"
+        << "  --udq-substitute=<TARGET,SOURCE>     Map missing UDQ-derived summary key to existing source key\n"
         << "  --no-summary                         Ignore SMSPEC/FSMSPEC summary data even if present\n"
         << "\n"
     << "mapping directives (file or --mapping-inline):\n"
@@ -148,6 +158,9 @@ Options parseOptions(int argc, char** argv)
         else if (startsWith(arg, "--summary=")) {
             opt.summary = valueAfterEquals(arg);
         }
+        else if (startsWith(arg, "--udq-substitute=")) {
+            opt.udqSubstitutions.push_back(valueAfterEquals(arg));
+        }
         else if (arg == "--no-summary") {
             opt.noSummary = true;
         }
@@ -157,6 +170,29 @@ Options parseOptions(int argc, char** argv)
     }
 
     return opt;
+}
+
+std::unordered_map<std::string, std::string>
+parseUdqSubstitutions(const Options& opt)
+{
+    std::unordered_map<std::string, std::string> substitutions;
+
+    for (const auto& spec : opt.udqSubstitutions) {
+        const auto commaPos = spec.find(',');
+        if (commaPos == std::string::npos
+            || commaPos == 0
+            || (commaPos + 1) >= spec.size())
+        {
+            throw std::invalid_argument("invalid --udq-substitute value '" + spec
+                                        + "' (expected TARGET,SOURCE)");
+        }
+
+        const auto target = spec.substr(0, commaPos);
+        const auto source = spec.substr(commaPos + 1);
+        substitutions[target] = source;
+    }
+
+    return substitutions;
 }
 
 bool validMode(const std::string& mode)
@@ -750,6 +786,167 @@ SummaryPayload loadSummaryPayload(const fs::path& summaryPath)
     return payload;
 }
 
+std::optional<RequiredSummaryFallback>
+requiredSummaryFallbackFromGroup(const Opm::Group& group)
+{
+    const auto& prod = group.productionProperties();
+
+    const auto candidatesForMode = [](const Opm::Group::ProductionCMode cmode,
+                                      const std::string& groupName)
+        -> std::optional<std::vector<std::string>>
+    {
+        switch (cmode) {
+        case Opm::Group::ProductionCMode::ORAT:
+            return std::vector<std::string>{"FOPR", "GOPR:" + groupName};
+        case Opm::Group::ProductionCMode::WRAT:
+            return std::vector<std::string>{"FWPR", "GWPR:" + groupName};
+        case Opm::Group::ProductionCMode::GRAT:
+            return std::vector<std::string>{"FGPR", "GGPR:" + groupName};
+        case Opm::Group::ProductionCMode::LRAT:
+            return std::vector<std::string>{"FLPR", "GLPR:" + groupName};
+        case Opm::Group::ProductionCMode::RESV:
+            return std::vector<std::string>{"FVPR", "GVPR:" + groupName};
+        default:
+            return std::nullopt;
+        }
+    };
+
+    const auto makeFallback = [&group, &prod, &candidatesForMode](const Opm::UDAValue& target)
+        -> std::optional<RequiredSummaryFallback>
+    {
+        if (!target.is<std::string>()) {
+            return std::nullopt;
+        }
+
+        const auto udqName = target.get<std::string>();
+        if (udqName.size() < 2 || udqName[1] != 'U') {
+            return std::nullopt;
+        }
+
+        const auto candidates = candidatesForMode(prod.cmode, group.name());
+        if (!candidates) {
+            return std::nullopt;
+        }
+
+        if (udqName.front() == 'F') {
+            auto fieldCandidates = *candidates;
+            if (fieldCandidates.size() >= 2U) {
+                fieldCandidates[1] = fieldCandidates[1].substr(0, fieldCandidates[1].find(':')) + ":FIELD";
+            }
+            return RequiredSummaryFallback{udqName, fieldCandidates};
+        }
+
+        if (udqName.front() == 'G') {
+            std::vector<std::string> groupCandidates;
+            groupCandidates.reserve(2);
+            if (candidates->size() >= 2U) {
+                groupCandidates.push_back((*candidates)[1]);
+                groupCandidates.push_back((*candidates)[0]);
+            }
+            return RequiredSummaryFallback{udqName + ":" + group.name(), groupCandidates};
+        }
+
+        return std::nullopt;
+    };
+
+    switch (prod.cmode) {
+    case Opm::Group::ProductionCMode::ORAT:
+        return makeFallback(prod.oil_target);
+    case Opm::Group::ProductionCMode::WRAT:
+        return makeFallback(prod.water_target);
+    case Opm::Group::ProductionCMode::GRAT:
+        return makeFallback(prod.gas_target);
+    case Opm::Group::ProductionCMode::LRAT:
+        return makeFallback(prod.liquid_target);
+    case Opm::Group::ProductionCMode::RESV:
+        return makeFallback(prod.resv_target);
+    default:
+        return std::nullopt;
+    }
+}
+
+std::vector<RequiredSummaryFallback>
+collectRequiredSummaryFallbacks(const Opm::Schedule& schedule)
+{
+    std::vector<RequiredSummaryFallback> required;
+    std::unordered_set<std::string> seen;
+
+    for (std::size_t step = 0; step < schedule.size(); ++step) {
+        for (const auto& groupName : schedule.groupNames(step)) {
+            const auto& group = schedule.getGroup(groupName, step);
+            const auto fallback = requiredSummaryFallbackFromGroup(group);
+            if (!fallback) {
+                continue;
+            }
+
+            if (seen.insert(fallback->missingKey).second) {
+                required.push_back(*fallback);
+            }
+        }
+    }
+
+    return required;
+}
+
+void addMissingSummaryFallbacks(SummaryPayload& payload,
+                                const std::vector<RequiredSummaryFallback>& requiredFallbacks,
+                                const std::unordered_map<std::string, std::string>& substitutions)
+{
+    std::unordered_map<std::string, std::size_t> keyIndex;
+    keyIndex.reserve(payload.keys.size());
+    for (std::size_t i = 0; i < payload.keys.size(); ++i) {
+        keyIndex.emplace(payload.keys[i], i);
+    }
+
+    for (const auto& fallback : requiredFallbacks) {
+        if (keyIndex.count(fallback.missingKey)) {
+            continue;
+        }
+
+        std::vector<std::string> resolutionCandidates;
+        if (const auto it = substitutions.find(fallback.missingKey); it != substitutions.end()) {
+            resolutionCandidates.push_back(it->second);
+        }
+        else {
+            resolutionCandidates = fallback.candidateKeys;
+        }
+
+        std::optional<std::string> selectedSource;
+        for (const auto& sourceKey : resolutionCandidates) {
+            if (keyIndex.count(sourceKey)) {
+                selectedSource = sourceKey;
+                break;
+            }
+        }
+
+        if (!selectedSource) {
+            std::ostringstream msg;
+            msg << "missing summary key '" << fallback.missingKey << "' needed for UDA/UDQ control reconstruction in FLUX output; "
+                << "none of the fallback vectors are available: ";
+
+            for (std::size_t i = 0; i < resolutionCandidates.size(); ++i) {
+                msg << "'" << resolutionCandidates[i] << "'";
+                if (i + 1 < resolutionCandidates.size()) {
+                    msg << ", ";
+                }
+            }
+
+            msg << ". Add one of these vectors to SUMMARY (or include the original UDQ key), "
+                << "or pass an explicit mapping with --udq-substitute="
+                << fallback.missingKey << ",<existing_summary_key>.";
+            throw std::invalid_argument(msg.str());
+        }
+
+        const auto sourceIndex = keyIndex.at(*selectedSource);
+        payload.keys.push_back(fallback.missingKey);
+        keyIndex[fallback.missingKey] = payload.keys.size() - 1;
+
+        for (auto& stepValues : payload.valuesPerStep) {
+            stepValues.push_back(stepValues.at(sourceIndex));
+        }
+    }
+}
+
 std::vector<double> optionalRestartArray(Opm::EclIO::ERst& restart,
                                          const std::string& keyword,
                                          const int reportStep)
@@ -945,6 +1142,9 @@ int run(const Options& opt)
 
     const auto deck = loadDeck(parentInput.deckPath);
     const Opm::EclipseState state(deck);
+    const Opm::Schedule schedule(deck, state);
+    const auto requiredFallbacks = collectRequiredSummaryFallbacks(schedule);
+    const auto substitutions = parseUdqSubstitutions(opt);
     const auto fluxMode = modeFromString(opt.mode);
     const auto dims = gridDims(state);
     const auto& unitSystem = state.getDeckUnitSystem();
@@ -997,6 +1197,7 @@ int run(const Options& opt)
     std::size_t restartStepStartIndex = 0;
     if (parentInput.summaryPath) {
         summaryPayload = loadSummaryPayload(*parentInput.summaryPath);
+        addMissingSummaryFallbacks(*summaryPayload, requiredFallbacks, substitutions);
         if (summaryPayload->reportTimes.size() == reportSteps.size()) {
             restartStepStartIndex = 0;
         }
