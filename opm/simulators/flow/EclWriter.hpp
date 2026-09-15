@@ -135,6 +135,7 @@ class EclWriter : public EclGenericWriter<GetPropType<TypeTag, Properties::Grid>
     using Scalar = GetPropType<TypeTag, Properties::Scalar>;
     using ElementContext = GetPropType<TypeTag, Properties::ElementContext>;
     using FluidSystem = GetPropType<TypeTag, Properties::FluidSystem>;
+    using Indices = GetPropType<TypeTag, Properties::Indices>;
     using Element = typename GridView::template Codim<0>::Entity;
     using ElementMapper = GetPropType<TypeTag, Properties::ElementMapper>;
     using ElementIterator = typename GridView::template Codim<0>::Iterator;
@@ -502,18 +503,6 @@ public:
 
         const int reportStepNum = simulator_.episodeIndex() + 1;
 
-        // DUMPFLUX samples the FLORES buffers. They are only allocated when the
-        // local cell data is prepared for a restart-writing (non-substep)
-        // output, and outputRestart() moves them into the restart solution
-        // afterwards. Refresh the cached cell data whenever the values are not
-        // currently available, otherwise the dumped rates would be stale.
-        if (! isSubStep && ! this->fluxDumpers_.empty()
-            && this->outputModule_->getFlows().anyFlores()
-            && ! this->outputModule_->getFlows().hasFloresValues())
-        {
-            this->outputModule_->invalidateLocalData();
-        }
-
         this->prepareLocalCellData(isSubStep, reportStepNum);
         this->outputModule_->outputErrorLog(simulator_.gridView().comm());
 
@@ -603,9 +592,97 @@ public:
         }
     }
 
-    void beginRestart()
+    //! \brief Sample the DUMPFLUX boundary rates for the time step that just finished.
+    //! \details The FLUX payload is declared as averaged over a report step. The
+    //!          values are taken straight from the linearizer, which holds the
+    //!          converged fluxes of the step and - unlike the output module's
+    //!          buffers - is not tied to the restart output cadence.
+    void sampleFluxDumperRates(const Scalar dt)
     {
-        const auto enablePCHysteresis = simulator_.problem().materialLawManager()->enablePCHysteresis();
+        if (this->fluxDumpers_.empty() || !this->collectOnIORank_.isIORank()) {
+            return;
+        }
+
+        if (!(dt > Scalar{0})) {
+            return;
+        }
+
+        const auto& floresInfo = this->simulator_.problem().model().linearizer().getFloresInfo();
+        if (floresInfo.empty()) {
+            return;
+        }
+
+        const auto& vanguard = this->simulator_.vanguard();
+
+        auto floresValue = [&floresInfo, &vanguard](const int globalCell,
+                                                    const FaceDir::DirEnum dir,
+                                                    const int eqIdx) -> double
+        {
+            const auto cell = vanguard.compressedIndex(globalCell);
+            if (cell < 0
+                || static_cast<std::size_t>(cell) >= static_cast<std::size_t>(floresInfo.size()))
+            {
+                return 0.0;
+            }
+
+            const auto faceId = FaceDir::ToIntersectionIndex(dir);
+            for (const auto& info : floresInfo[cell]) {
+                if (info.faceId == faceId) {
+                    return info.flow[eqIdx];
+                }
+            }
+
+            return 0.0;
+        };
+
+        if (this->fluxRateSnapshots_.size() != this->fluxDumpers_.size()) {
+            this->fluxRateSnapshots_.assign(this->fluxDumpers_.size(), {});
+        }
+
+        for (std::size_t i = 0; i < this->fluxDumpers_.size(); ++i) {
+            this->fluxRateSnapshots_[i].push_back(
+                this->fluxDumpers_[i].makeFaceMajorRates(
+                    [&floresValue, this](const FluxRegions::BoundaryFace& face,
+                                         const EclIO::FluxFile::Phase phase)
+                    {
+                        if (face.isNnc || face.direction == FaceDir::Unknown) {
+                            return 0.0;
+                        }
+
+                        const auto eqIdx = this->fluxEquationIndex_(phase);
+                        if (eqIdx < 0) {
+                            return 0.0;
+                        }
+
+                        // FLORES is stored per cell for the positive face
+                        // directions only and is oriented along the positive
+                        // axis, while the FLUX file is positive into the sector.
+                        switch (face.direction) {
+                        case FaceDir::XPlus:
+                        case FaceDir::YPlus:
+                        case FaceDir::ZPlus:
+                            return -floresValue(face.interiorGlobalCell, face.direction, eqIdx);
+
+                        case FaceDir::XMinus:
+                            return floresValue(face.exteriorGlobalCell, FaceDir::XPlus, eqIdx);
+
+                        case FaceDir::YMinus:
+                            return floresValue(face.exteriorGlobalCell, FaceDir::YPlus, eqIdx);
+
+                        case FaceDir::ZMinus:
+                            return floresValue(face.exteriorGlobalCell, FaceDir::ZPlus, eqIdx);
+
+                        default:
+                            return 0.0;
+                        }
+                    }));
+        }
+
+        this->fluxRateTimeWeights_.push_back(static_cast<double>(dt));
+    }
+
+    void beginRestart()
+    {        const auto enablePCHysteresis = simulator_.problem().materialLawManager()->enablePCHysteresis();
         const auto enableNonWettingHysteresis = simulator_.problem().materialLawManager()->enableNonWettingHysteresis();
         const auto enableWettingHysteresis = simulator_.problem().materialLawManager()->enableWettingHysteresis();
         const auto oilActive = FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx);
@@ -1032,6 +1109,26 @@ private:
         return FluidSystem::oilCompIdx;
     }
 
+    int fluxEquationIndex_(const EclIO::FluxFile::Phase phase) const
+    {
+        switch (phase) {
+        case EclIO::FluxFile::Phase::Oil:
+            return Indices::oilEnabled
+                ? Indices::conti0EqIdx + FluidSystem::canonicalToActiveCompIdx(FluidSystem::oilCompIdx)
+                : -1;
+        case EclIO::FluxFile::Phase::Water:
+            return Indices::waterEnabled
+                ? Indices::conti0EqIdx + FluidSystem::canonicalToActiveCompIdx(FluidSystem::waterCompIdx)
+                : -1;
+        case EclIO::FluxFile::Phase::Gas:
+            return Indices::gasEnabled
+                ? Indices::conti0EqIdx + FluidSystem::canonicalToActiveCompIdx(FluidSystem::gasCompIdx)
+                : -1;
+        }
+
+        return -1;
+    }
+
     EclIO::FluxFile::Mode fluxOutputMode_(const std::string& fluxType) const
     {
         if (fluxType == "PRESSURE") {
@@ -1292,6 +1389,10 @@ private:
         const bool haveCapturedRates =
             this->fluxCapturedFaceRates_.size() == this->fluxDumpers_.size();
 
+        const bool haveAggregatedRates =
+            !this->fluxRateTimeWeights_.empty()
+            && this->fluxRateSnapshots_.size() == this->fluxDumpers_.size();
+
         for (std::size_t dumperIdx = 0; dumperIdx < this->fluxDumpers_.size(); ++dumperIdx) {
             auto& dumper = this->fluxDumpers_[dumperIdx];
             dumper.setSummaryKeys(summaryKeys);
@@ -1304,11 +1405,19 @@ private:
                                                 startTime,
                                                 stepLength);
 
-            if (haveCapturedRates) {
+            if (haveAggregatedRates) {
+                // Time-weighted average over the report step's time steps.
+                step.rates = FluxDumper::aggregateRates(EclIO::FluxFile::Sampling::Averaged,
+                                                        this->fluxRateSnapshots_[dumperIdx],
+                                                        this->fluxRateTimeWeights_);
+            }
+            else if (haveCapturedRates) {
                 // Cartesian contributions were sampled before the FLORES buffers
                 // were moved into the restart solution.
                 step.rates = this->fluxCapturedFaceRates_[dumperIdx];
+            }
 
+            if (haveAggregatedRates || haveCapturedRates) {
                 // NNC contributions are not affected by that move and are
                 // resolved here so the parallel gather has completed.
                 const auto nncRates = dumper.makeFaceMajorRates(
@@ -1403,6 +1512,12 @@ private:
             dumper.appendReportStep(step);
         }
 
+        // Start a fresh accumulation window for the next report step.
+        for (auto& snapshots : this->fluxRateSnapshots_) {
+            snapshots.clear();
+        }
+        this->fluxRateTimeWeights_.clear();
+
         this->writeFluxDumpers_();
     }
 
@@ -1448,6 +1563,8 @@ private:
     std::vector<std::string> fluxOutputPaths_;
     std::map<std::pair<int, int>, int> fluxNncPairToIndex_;
     std::vector<std::vector<double>> fluxCapturedFaceRates_;
+    std::vector<std::vector<std::vector<double>>> fluxRateSnapshots_;
+    std::vector<double> fluxRateTimeWeights_;
     bool fluxMissingFloresReported_ = false;
     bool fluxTransmissibilitiesAssigned_ = false;
 };
