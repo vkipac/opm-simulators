@@ -1054,7 +1054,8 @@ void fillFluxStepData(Opm::FluxDumper::ReportStepData& step,
                       Opm::EclIO::ERst& restart,
                       const int reportStep,
                       const int phaseMask,
-                      const std::map<NncKey, int>& nncPairToIndex)
+                      const std::map<NncKey, int>& nncPairToIndex,
+                      const Opm::UnitSystem& unitSystem)
 {
     step.rates.clear();
 
@@ -1093,7 +1094,8 @@ void fillFluxStepData(Opm::FluxDumper::ReportStepData& step,
                     throw std::invalid_argument("NNC rate array is smaller than expected for parent NNC list");
                 }
 
-                const auto nncFlux = values[nncIndex];
+                const auto nncFlux = unitSystem.to_si(Opm::UnitSystem::measure::rate,
+                                                      values[nncIndex]);
                 step.rates.push_back((face.interiorGlobalCell == key.second) ? nncFlux : -nncFlux);
                 continue;
             }
@@ -1106,7 +1108,10 @@ void fillFluxStepData(Opm::FluxDumper::ReportStepData& step,
 
             // Restart directional face rates use the interior-cell face orientation.
             // FLUX files store positive values into the sector, i.e. opposite sign.
-            step.rates.push_back(-values[interior]);
+            // The restart arrays are written in the deck's output units while the
+            // FLUX payload is SI, so convert here.
+            step.rates.push_back(-unitSystem.to_si(Opm::UnitSystem::measure::rate,
+                                                   values[interior]));
         }
     }
 }
@@ -1231,7 +1236,8 @@ int run(const Options& opt)
                              restart,
                              sourceReportStep,
                              phaseMaskValue,
-                             nncPairToIndex);
+                             nncPairToIndex,
+                             unitSystem);
         }
 
         if (hasPressureMode(fluxMode)) {

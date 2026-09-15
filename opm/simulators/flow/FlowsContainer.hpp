@@ -136,6 +136,20 @@ public:
     bool hasFlores() const
     { return enableFlores_; }
 
+    //! \brief Whether the FLORES buffers currently hold data.
+    //! \details outputRestart() moves the buffers into the restart solution,
+    //!          so being enabled does not imply that values are available.
+    bool hasFloresValues() const
+    {
+        return std::any_of(flores_.begin(), flores_.end(),
+                           [](const auto& dirBuffers)
+                           {
+                               return std::any_of(dirBuffers.begin(), dirBuffers.end(),
+                                                  [](const auto& buffer)
+                                                  { return !buffer.empty(); });
+                           });
+    }
+
     bool anyFlores() const
     { return anyFlores_; }
 

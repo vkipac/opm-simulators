@@ -502,13 +502,14 @@ public:
 
         const int reportStepNum = simulator_.episodeIndex() + 1;
 
-        // DUMPFLUX samples the FLORES buffers, which are only allocated when the
+        // DUMPFLUX samples the FLORES buffers. They are only allocated when the
         // local cell data is prepared for a restart-writing (non-substep)
-        // output. If the cached data was prepared during a substep those buffers
-        // are missing, so force a refresh before they are needed.
+        // output, and outputRestart() moves them into the restart solution
+        // afterwards. Refresh the cached cell data whenever the values are not
+        // currently available, otherwise the dumped rates would be stale.
         if (! isSubStep && ! this->fluxDumpers_.empty()
             && this->outputModule_->getFlows().anyFlores()
-            && ! this->outputModule_->getFlows().hasFlores())
+            && ! this->outputModule_->getFlows().hasFloresValues())
         {
             this->outputModule_->invalidateLocalData();
         }
