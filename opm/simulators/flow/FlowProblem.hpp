@@ -1239,24 +1239,41 @@ public:
         if (!hasDeckBc) {
             RateVector phaseVolRate = 0.0;
             if (this->fluxBoundaryPhaseVolumetricRate_(globalSpaceIdx, dir, phaseVolRate)) {
-                // Retain legacy mass-like fallback for generic callers; BlackOil now
-                // provides a dedicated live-density conversion path in boundary().
+                // The FLUX payload holds reservoir-condition volumetric rates, so
+                // the conversion to a mass rate has to use the in-situ density.
+                // Using the surface reference density would overstate the
+                // exchanged mass by the formation volume factor.
                 const auto pvtRegionIdx = this->pvtRegionIndex(globalSpaceIdx);
+                const auto* intQuants =
+                    this->simulator().model().cachedIntensiveQuantities(globalSpaceIdx, /*timeIdx=*/0);
+
+                auto phaseDensity = [&intQuants, pvtRegionIdx](const unsigned phaseIdx)
+                {
+                    if (intQuants != nullptr) {
+                        const auto rho = getValue(intQuants->fluidState().density(phaseIdx));
+                        if (std::isfinite(rho) && rho > 0.0) {
+                            return static_cast<Scalar>(rho);
+                        }
+                    }
+
+                    return FluidSystem::referenceDensity(phaseIdx, pvtRegionIdx);
+                };
+
                 RateVector rate = 0.0;
                 if (FluidSystem::phaseIsActive(oilPhaseIdx)) {
                     rate[FluidSystem::canonicalToActiveCompIdx(oilCompIdx)] =
                         phaseVolRate[FluidSystem::canonicalToActiveCompIdx(oilCompIdx)]
-                        * FluidSystem::referenceDensity(oilPhaseIdx, pvtRegionIdx);
+                        * phaseDensity(oilPhaseIdx);
                 }
                 if (FluidSystem::phaseIsActive(waterPhaseIdx)) {
                     rate[FluidSystem::canonicalToActiveCompIdx(waterCompIdx)] =
                         phaseVolRate[FluidSystem::canonicalToActiveCompIdx(waterCompIdx)]
-                        * FluidSystem::referenceDensity(waterPhaseIdx, pvtRegionIdx);
+                        * phaseDensity(waterPhaseIdx);
                 }
                 if (FluidSystem::phaseIsActive(gasPhaseIdx)) {
                     rate[FluidSystem::canonicalToActiveCompIdx(gasCompIdx)] =
                         phaseVolRate[FluidSystem::canonicalToActiveCompIdx(gasCompIdx)]
-                        * FluidSystem::referenceDensity(gasPhaseIdx, pvtRegionIdx);
+                        * phaseDensity(gasPhaseIdx);
                 }
 
                 return { BCType::RATE, rate };
