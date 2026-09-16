@@ -1155,12 +1155,20 @@ private:
 
         const auto& state = this->eclState();
         const auto& fieldProps = state.globalFieldProps();
+        const auto& io = state.getIOConfig();
 
-        if (!fieldProps.has_int("FLUXREG")) {
+        // USEFLUX consumer decks now also carry FLUXNUM as the region map, so
+        // FLUXNUM alone no longer means "this run should dump FLUX files".
+        // Only producer runs bootstrap dumpers.
+        if (io.getUseFlux()) {
             return;
         }
 
-        const auto& regionValues = fieldProps.get_int("FLUXREG");
+        if (!fieldProps.has_int("FLUXNUM")) {
+            return;
+        }
+
+        const auto& regionValues = fieldProps.get_int("FLUXNUM");
         const auto dims = state.gridDims().getNXYZ();
 
         std::vector<std::array<int, 2>> nncConnections;
@@ -1203,7 +1211,6 @@ private:
             return;
         }
 
-        const auto& io = state.getIOConfig();
         const auto phaseMask = this->fluxPhaseMask_();
         const auto fluxMode = this->fluxOutputMode_(io.getFluxType());
 
@@ -1237,7 +1244,7 @@ private:
 
         OpmLog::note("DUMPFLUX bootstrap: initialized "
                      + std::to_string(this->fluxDumpers_.size())
-                     + " region dumper(s) from FLUXREG");
+                 + " region dumper(s) from FLUXNUM");
     }
 
     // The FLORES buffers owned by the output module are moved into the restart

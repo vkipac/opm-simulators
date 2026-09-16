@@ -871,10 +871,13 @@ OPERNUM
 FAULTS
 /
 INCLUDE
- 'FLUXNUM_SECTOR.grdecl' /
+ 'FLUXNUM.grdecl' /
+
+FLUXREG
+   1 /
 
 USEFLUX
- 1* /
+   1* /
 
 FLUXTYPE
   FLUX /

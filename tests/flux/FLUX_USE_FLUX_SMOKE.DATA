@@ -32,7 +32,10 @@ PERMX
   100*500 /
 
 FLUXNUM
-  100*1 /
+  50*1 50*0 /
+
+FLUXREG
+  1 /
 
 FLUXTYPE
   FLUX /

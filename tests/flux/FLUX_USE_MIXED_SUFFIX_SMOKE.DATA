@@ -35,11 +35,14 @@ PERMX
 FLUXNUM
   100*1 /
 
+FLUXREG
+  1 /
+
 FLUXTYPE
   FLUX /
 
 USEFLUX
- 1* /
+  1* /
 
 PROPS
 

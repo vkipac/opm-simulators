@@ -363,4 +363,41 @@ std::vector<int> FluxRegions::buildActnum(const std::vector<int>& regionValues,
     return actnum;
 }
 
+std::vector<int> FluxRegions::buildActnum(const std::vector<int>& regionValues,
+                                          const std::vector<int>& regionIds)
+{
+    std::set<int> selectedIds;
+    for (const auto regionId : regionIds) {
+        if (regionId > 0) {
+            selectedIds.insert(regionId);
+        }
+    }
+
+    if (selectedIds.empty()) {
+        OPM_THROW(std::invalid_argument,
+                  "FluxRegions::buildActnum(): FLUXREG must list at least one positive region id");
+    }
+
+    std::set<int> availableIds;
+    for (const auto value : regionValues) {
+        if (value > 0) {
+            availableIds.insert(value);
+        }
+    }
+
+    for (const auto regionId : selectedIds) {
+        if (!availableIds.count(regionId)) {
+            OPM_THROW(std::invalid_argument,
+                      "FluxRegions::buildActnum(): FLUXREG selects a region id not present in FLUXNUM");
+        }
+    }
+
+    std::vector<int> actnum(regionValues.size(), 0);
+    for (std::size_t index = 0; index < regionValues.size(); ++index) {
+        actnum[index] = selectedIds.count(regionValues[index]) ? 1 : 0;
+    }
+
+    return actnum;
+}
+
 } // namespace Opm

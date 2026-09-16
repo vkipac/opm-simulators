@@ -77,6 +77,9 @@ public:
     static std::vector<int> buildActnum(const std::vector<int>& regionValues,
                                         int regionId);
 
+    static std::vector<int> buildActnum(const std::vector<int>& regionValues,
+                                        const std::vector<int>& regionIds);
+
     static int cartesianIndex(const std::array<int, 3>& dims,
                               int i,
                               int j,

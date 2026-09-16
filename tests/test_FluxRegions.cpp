@@ -108,6 +108,17 @@ BOOST_AUTO_TEST_CASE(BuildsActnumForSelectedRegion)
     BOOST_CHECK_EQUAL(actnum[4], 0);
 }
 
+BOOST_AUTO_TEST_CASE(BuildsActnumForSelectedRegionList)
+{
+    const auto actnum = Opm::FluxRegions::buildActnum(std::vector<int>{0, 2, 3, 2, 4}, std::vector<int>{2, 4});
+    BOOST_REQUIRE_EQUAL(actnum.size(), 5U);
+    BOOST_CHECK_EQUAL(actnum[0], 0);
+    BOOST_CHECK_EQUAL(actnum[1], 1);
+    BOOST_CHECK_EQUAL(actnum[2], 0);
+    BOOST_CHECK_EQUAL(actnum[3], 1);
+    BOOST_CHECK_EQUAL(actnum[4], 1);
+}
+
 BOOST_AUTO_TEST_CASE(ExtractsCartesianBoundaryFaces)
 {
     const std::array<int, 3> dims{4, 1, 1};
