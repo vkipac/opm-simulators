@@ -56,7 +56,8 @@ double mutationValue(const std::string& mutation)
 int main(int argc, char** argv)
 {
     if (argc != 4) {
-        return fail("usage: flux_smoke_mutate <input.FLUX> <output.FLUX> <nan|inf|ninf>");
+        return fail("usage: flux_smoke_mutate <input.FLUX> <output.FLUX> "
+                    "<nan|inf|ninf|strip-summary>");
     }
 
     const std::string inputPath = argv[1];
@@ -64,6 +65,24 @@ int main(int argc, char** argv)
     const std::string mutation = argv[3];
 
     auto data = Opm::EclIO::FluxFile::read(inputPath);
+
+    if (mutation == "strip-summary") {
+        // Remove the embedded parent summary vectors so that a USEFLUX run has
+        // to fall back to the parent run's own summary output.
+        if (data.summaryKeys.empty() && data.summarySamples.empty()) {
+            return fail("input file already has no embedded summary data");
+        }
+
+        data.summaryKeys.clear();
+        data.summarySamples.clear();
+        data.header.numSummaryKeys = 0;
+        data.header.numSummarySamples = 0;
+        data.header.summaryPerTimestep = false;
+        data.header.summaryMinSampleInterval = 0.0;
+
+        Opm::EclIO::FluxFile::write(outputPath, /*formatted=*/false, data);
+        return EXIT_SUCCESS;
+    }
 
     if (!hasFluxMode(data.header.mode)) {
         return fail("input file does not contain FLUX mode rates");

@@ -69,6 +69,13 @@ struct UseHybridNewton { static constexpr bool value = false; };
 // Conserve inner energy instead of enthalpy even if THERMAL is used
 struct ConserveInnerEnergyThermal { static constexpr bool value = false; };
 
+// Minimum time, in DAYS, between consecutive parent summary samples written to
+// the .FLUX file by a DUMPFLUX run.  Every time step is sampled unless doing so
+// would place the sample within this interval of the previous one; report step
+// boundaries are always sampled.  Zero samples every time step.
+template<class Scalar>
+struct FluxSummaryMinIntervalBetweenSamples { static constexpr Scalar value = 1.0; };
+
 } // namespace Opm::Parameters
 
 namespace Opm {

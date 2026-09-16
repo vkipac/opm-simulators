@@ -54,7 +54,6 @@ bool compareVector(const std::vector<double>& lhs,
 bool compareStep(const Opm::EclIO::FluxFile::ReportStep& lhs,
                  const Opm::EclIO::FluxFile::ReportStep& rhs,
                  const std::size_t stepIdx,
-                 const bool compareSummary,
                  const bool ignorePressures,
                  const bool ignoreTimes)
 {
@@ -89,11 +88,7 @@ bool compareStep(const Opm::EclIO::FluxFile::ReportStep& lhs,
         && compareVector(lhs.rv, rhs.rv, "rv", 1e-4)
         && compareVector(lhs.temperature, rhs.temperature, "temperature", 1e-6);
 
-    if (!basicMatch) {
-        return false;
-    }
-
-    return !compareSummary || compareVector(lhs.summaryValues, rhs.summaryValues, "summaryValues", 1e-10);
+    return basicMatch;
 }
 
 } // namespace
@@ -217,10 +212,34 @@ int main(int argc, char** argv)
         if (!compareStep(expected.reportSteps[i],
                          actual.reportSteps[i - expectedStepOffset],
                          i - expectedStepOffset,
-                         compareSummary,
                          ignorePressures,
                          ignoreTimes)) {
             return fail("report step payload mismatch at index " + std::to_string(i));
+        }
+    }
+
+    // Summary samples form their own series, independent of the report steps.
+    if (compareSummary) {
+        if (expected.summarySamples.size() != actual.summarySamples.size()) {
+            std::cerr << "summary sample count mismatch: "
+                      << expected.summarySamples.size() << " vs "
+                      << actual.summarySamples.size() << '\n';
+            return fail("summary sample count mismatch");
+        }
+
+        for (std::size_t i = 0; i < expected.summarySamples.size(); ++i) {
+            const auto& lhs = expected.summarySamples[i];
+            const auto& rhs = actual.summarySamples[i];
+
+            if (!ignoreTimes && !closeEnough(lhs.time, rhs.time, 1e-10)) {
+                std::cerr << "summary sample time mismatch at index " << i << ": "
+                          << lhs.time << " vs " << rhs.time << '\n';
+                return fail("summary sample time mismatch");
+            }
+
+            if (!compareVector(lhs.values, rhs.values, "summaryValues", 1e-10)) {
+                return fail("summary sample payload mismatch at index " + std::to_string(i));
+            }
         }
     }
 

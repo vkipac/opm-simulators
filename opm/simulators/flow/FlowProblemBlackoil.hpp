@@ -296,7 +296,7 @@ public:
         const auto& schedule = vanguard.schedule();
 
         if (episodeIdx >= 0) {
-            this->restoreFluxSummaryState_(episodeIdx);
+            this->seedParentSummaryState_(this->fluxParentSummaryTime_());
         }
 
         // Evaluate UDQ assign statements to make sure the settings are
@@ -305,8 +305,7 @@ public:
             .evalUDQAssignments(episodeIdx, vanguard.udqState());
 
         if (episodeIdx >= 0) {
-            this->restoreFluxUdqState_(episodeIdx);
-            this->applyFluxGroupTargetCorrection_(episodeIdx);
+            this->applyFluxGroupTargetCorrection_(episodeIdx, this->fluxParentSummaryTime_());
         }
 
         if (episodeIdx >= 0) {
@@ -325,359 +324,91 @@ public:
         }
     }
 
-    void restoreFluxSummaryState_(const int episodeIdx)
+    //! \brief Seed the SummaryState from the parent run's summary vectors.
+    //!
+    //! \details Called at the start of every time step, before UDQ assignments
+    //!          are evaluated, so that quantities the reduced run cannot
+    //!          compute for itself are nevertheless available to UDQ, UDA and
+    //!          group control through the standard code paths.
+    //!
+    //!          Values are assigned verbatim -- no delta arithmetic -- so the
+    //!          state starts out as a clean snapshot of the parent at this
+    //!          point in time. Everything the reduced run does compute is
+    //!          subsequently overwritten by Summary::eval().
+    //!
+    //!          Cumulative (Total) quantities are deliberately NOT seeded.
+    //!          SummaryState::update() accumulates into those keys rather than
+    //!          assigning, so seeding a cumulative and then letting
+    //!          Summary::eval() add this step's contribution on top would count
+    //!          the same production twice. Cumulatives are instead built up by
+    //!          the normal accumulation path from the rates, including the
+    //!          rates injected for wells outside the region.
+    void seedParentSummaryState_(const double time)
     {
-        const auto* fluxData = this->fluxBoundaryData_();
-        const auto* fluxStep = this->fluxBoundaryReportStep_();
-        if (!fluxData || !fluxStep || fluxData->summaryKeys.empty()) {
+        const auto* parent = this->fluxParentSummary_();
+        if (parent == nullptr) {
             return;
         }
 
-        if (fluxData->summaryKeys.size() != fluxStep->summaryValues.size()) {
-            throw std::runtime_error("USEFLUX FLUX summary payload is inconsistent");
-        }
-
         auto& summaryState = this->simulator().vanguard().summaryState();
-        const auto& schedule = this->simulator().vanguard().schedule();
-        const auto stepIdx = static_cast<std::size_t>(episodeIdx);
 
-        std::unordered_map<std::string, double> parentValues;
-        parentValues.reserve(fluxData->summaryKeys.size());
-        for (std::size_t index = 0; index < fluxData->summaryKeys.size(); ++index) {
-            parentValues.emplace(fluxData->summaryKeys[index], fluxStep->summaryValues[index]);
-        }
+        for (const auto& key : parent->keys()) {
+            if (ParentSummary::keyType(key) == SummaryConfigNode::Type::Total) {
+                continue;
+            }
 
-        const auto localWells = schedule.wellNames(stepIdx);
-
-        const auto localWellExists = [&schedule, episodeIdx](const std::string& wellName)
-        {
-            return (episodeIdx >= 0) && schedule.hasWell(wellName, static_cast<std::size_t>(episodeIdx));
-        };
-
-        for (std::size_t index = 0; index < fluxData->summaryKeys.size(); ++index) {
-            const auto& key = fluxData->summaryKeys[index];
-            const auto value = fluxStep->summaryValues[index];
-            const auto category = EclIO::SummaryNode::category_from_keyword(key);
+            const auto value = parent->valueAt(key, time);
+            if (!std::isfinite(value)) {
+                continue;
+            }
 
             const auto firstColon = key.find(':');
             const auto secondColon = (firstColon == std::string::npos)
                 ? std::string::npos
                 : key.find(':', firstColon + 1);
 
-            // Keep sector-local well/control quantities in place; parent data is fallback.
-            if ((category == EclIO::SummaryNode::Category::Well
-                 || category == EclIO::SummaryNode::Category::Connection
-                 || category == EclIO::SummaryNode::Category::Completion
-                 || category == EclIO::SummaryNode::Category::Segment)
-                && firstColon != std::string::npos)
-            {
-                const auto wellName = key.substr(firstColon + 1,
-                    (secondColon == std::string::npos) ? std::string::npos : secondColon - firstColon - 1);
-                if (localWellExists(wellName) && summaryState.has(key)) {
-                    continue;
-                }
-            }
-
             const auto keyword = (firstColon == std::string::npos)
                 ? key
                 : key.substr(0, firstColon);
-            const auto valueType = parseKeywordType(keyword);
-            const auto isTotal = valueType == SummaryConfigNode::Type::Total;
 
-            if (category == EclIO::SummaryNode::Category::Well && firstColon != std::string::npos) {
-                const auto& wellName = key.substr(firstColon + 1);
-                const auto previous = summaryState.get_well_var(wellName, keyword, 0.0);
-                summaryState.update_well_var(wellName, keyword, isTotal ? (value - previous) : value);
-            }
-            else if (category == EclIO::SummaryNode::Category::Group && firstColon != std::string::npos) {
-                const auto& groupName = key.substr(firstColon + 1);
-                const auto previous = summaryState.get_group_var(groupName, keyword, 0.0);
-                summaryState.update_group_var(groupName, keyword, valueType, isTotal ? (value - previous) : value);
-            }
-            else if ((category == EclIO::SummaryNode::Category::Connection
-                      || category == EclIO::SummaryNode::Category::Completion)
-                     && firstColon != std::string::npos
-                     && secondColon != std::string::npos)
-            {
-                const auto& wellName = key.substr(firstColon + 1, secondColon - firstColon - 1);
-                const auto number = static_cast<std::size_t>(std::stoul(key.substr(secondColon + 1)));
-                const auto previous = summaryState.get_conn_var(wellName, keyword, number, 0.0);
-                summaryState.update_conn_var(wellName, keyword, valueType, number,
-                                             isTotal ? (value - previous) : value);
-            }
-            else if (category == EclIO::SummaryNode::Category::Segment
-                     && firstColon != std::string::npos
-                     && secondColon != std::string::npos) {
-                const auto& wellName = key.substr(firstColon + 1, secondColon - firstColon - 1);
-                const auto segment = static_cast<std::size_t>(std::stoul(key.substr(secondColon + 1)));
-                const auto previous = summaryState.get_segment_var(wellName, keyword, segment, 0.0);
-                summaryState.update_segment_var(wellName, keyword, segment,
-                                                isTotal ? (value - previous) : value);
-            }
-            else {
+            switch (EclIO::SummaryNode::category_from_keyword(key)) {
+            case EclIO::SummaryNode::Category::Well:
+                if (firstColon != std::string::npos) {
+                    summaryState.update_well_var(key.substr(firstColon + 1), keyword, value);
+                }
+                break;
+
+            case EclIO::SummaryNode::Category::Group:
+                if (firstColon != std::string::npos) {
+                    summaryState.update_group_var(key.substr(firstColon + 1), keyword, value);
+                }
+                break;
+
+            case EclIO::SummaryNode::Category::Connection:
+            case EclIO::SummaryNode::Category::Completion:
+                if (secondColon != std::string::npos) {
+                    summaryState.update_conn_var(
+                        key.substr(firstColon + 1, secondColon - firstColon - 1),
+                        keyword,
+                        static_cast<std::size_t>(std::stoul(key.substr(secondColon + 1))),
+                        value);
+                }
+                break;
+
+            case EclIO::SummaryNode::Category::Segment:
+                if (secondColon != std::string::npos) {
+                    summaryState.update_segment_var(
+                        key.substr(firstColon + 1, secondColon - firstColon - 1),
+                        keyword,
+                        static_cast<std::size_t>(std::stoul(key.substr(secondColon + 1))),
+                        value);
+                }
+                break;
+
+            default:
                 summaryState.set(key, value);
+                break;
             }
-        }
-
-        const auto wellEquivalentKeyword = [](const std::string& aggregateKeyword)
-        {
-            if (aggregateKeyword.empty()) {
-                return std::string{};
-            }
-
-            if ((aggregateKeyword.front() != 'F') && (aggregateKeyword.front() != 'G')) {
-                return std::string{};
-            }
-
-            auto result = aggregateKeyword;
-            result.front() = 'W';
-            return result;
-        };
-
-        const auto wellBelongsToGroup = [&schedule, stepIdx](const std::string& wellName,
-                                                             const std::string& groupName)
-        {
-            if (groupName == "FIELD") {
-                return true;
-            }
-
-            if (!schedule.hasWell(wellName, stepIdx)) {
-                return false;
-            }
-
-            auto currentGroup = schedule.getWell(wellName, stepIdx).groupName();
-            while (!currentGroup.empty()) {
-                if (currentGroup == groupName) {
-                    return true;
-                }
-
-                if (!schedule.hasGroup(currentGroup, stepIdx)) {
-                    break;
-                }
-
-                const auto parentGroup = schedule.getGroup(currentGroup, stepIdx).flow_group();
-                if (!parentGroup.has_value()) {
-                    break;
-                }
-
-                currentGroup = *parentGroup;
-            }
-
-            return false;
-        };
-
-        for (const auto& aggregateKey : fluxData->summaryKeys) {
-            const auto category = EclIO::SummaryNode::category_from_keyword(aggregateKey);
-            if ((category != EclIO::SummaryNode::Category::Field)
-                && (category != EclIO::SummaryNode::Category::Group)) {
-                continue;
-            }
-
-            const auto firstColon = aggregateKey.find(':');
-            const auto aggregateKeyword = (firstColon == std::string::npos)
-                ? aggregateKey
-                : aggregateKey.substr(0, firstColon);
-            const auto groupName = (firstColon == std::string::npos)
-                ? std::string{"FIELD"}
-                : aggregateKey.substr(firstColon + 1);
-
-            const auto parentAggregateIt = parentValues.find(aggregateKey);
-            if (parentAggregateIt == parentValues.end()) {
-                continue;
-            }
-
-            const auto wellKeyword = wellEquivalentKeyword(aggregateKeyword);
-            if (wellKeyword.empty()) {
-                continue;
-            }
-
-            double correctedValue = 0.0;
-            bool hasContribution = false;
-
-            for (const auto& wellName : localWells) {
-                if ((category == EclIO::SummaryNode::Category::Group)
-                    && !wellBelongsToGroup(wellName, groupName)) {
-                    continue;
-                }
-
-                const auto wellKey = wellKeyword + ":" + wellName;
-                const auto parentWellIt = parentValues.find(wellKey);
-                if ((parentWellIt == parentValues.end()) && !summaryState.has(wellKey)) {
-                    continue;
-                }
-
-                const auto value = summaryState.has(wellKey)
-                    ? summaryState.get(wellKey, summaryState.get_udq_undefined())
-                    : parentWellIt->second;
-
-                if (summaryState.is_undefined_value(value)) {
-                    continue;
-                }
-
-                correctedValue += value;
-                hasContribution = true;
-            }
-
-            if (hasContribution) {
-                summaryState.set(aggregateKey, correctedValue);
-            }
-            else {
-                summaryState.set(aggregateKey, parentAggregateIt->second);
-            }
-        }
-
-        (void)episodeIdx;
-    }
-
-    void restoreFluxUdqState_(const int episodeIdx)
-    {
-        const auto* fluxData = this->fluxBoundaryData_();
-        const auto* fluxStep = this->fluxBoundaryReportStep_();
-        if (!fluxData || !fluxStep || fluxData->summaryKeys.empty()) {
-            return;
-        }
-
-        if (fluxData->summaryKeys.size() != fluxStep->summaryValues.size()) {
-            throw std::runtime_error("USEFLUX FLUX summary payload is inconsistent");
-        }
-
-        auto& vanguard = this->simulator().vanguard();
-        auto& summaryState = vanguard.summaryState();
-        auto& udqState = vanguard.udqState();
-        const auto& schedule = vanguard.schedule();
-        const auto stepIdx = static_cast<std::size_t>(episodeIdx);
-
-        std::unordered_map<std::string, double> parentValues;
-        parentValues.reserve(fluxData->summaryKeys.size());
-        for (std::size_t index = 0; index < fluxData->summaryKeys.size(); ++index) {
-            parentValues.emplace(fluxData->summaryKeys[index], fluxStep->summaryValues[index]);
-        }
-
-        const auto localWells = schedule.wellNames(stepIdx);
-        const auto oilRateForWell = [&parentValues](const std::string& wellName)
-        {
-            const auto key = std::string{"WOPR:"} + wellName;
-            const auto parentIt = parentValues.find(key);
-            return (parentIt == parentValues.end()) ? std::numeric_limits<double>::quiet_NaN() : parentIt->second;
-        };
-
-        const auto wellBelongsToGroup = [&schedule, stepIdx](const std::string& wellName,
-                                                             const std::string& groupName)
-        {
-            if (groupName == "FIELD") {
-                return true;
-            }
-
-            if (!schedule.hasWell(wellName, stepIdx)) {
-                return false;
-            }
-
-            auto currentGroup = schedule.getWell(wellName, stepIdx).groupName();
-            while (!currentGroup.empty()) {
-                if (currentGroup == groupName) {
-                    return true;
-                }
-
-                if (!schedule.hasGroup(currentGroup, stepIdx)) {
-                    break;
-                }
-
-                const auto parentGroup = schedule.getGroup(currentGroup, stepIdx).flow_group();
-                if (!parentGroup.has_value()) {
-                    break;
-                }
-
-                currentGroup = *parentGroup;
-            }
-
-            return false;
-        };
-
-        double localFieldOil = 0.0;
-        for (const auto& wellName : localWells) {
-            const auto oil = oilRateForWell(wellName);
-            if (std::isfinite(oil)) {
-                localFieldOil += oil;
-            }
-        }
-
-        const auto parentFieldOilIt = parentValues.find("FOPR");
-        const bool haveParentFieldOil = (parentFieldOilIt != parentValues.end())
-            && std::isfinite(parentFieldOilIt->second);
-
-        // Some decks use FU* quantities for UDA targets without writing them to SMSPEC.
-        // Apply the field-level correction directly from the active UDQ state in that case.
-        if (haveParentFieldOil && udqState.has("FUPRODGO") && !parentValues.count("FUPRODGO")) {
-            const auto baseTarget = udqState.get("FUPRODGO");
-            const auto corrected = baseTarget - (parentFieldOilIt->second - localFieldOil);
-            if (std::isfinite(corrected)) {
-                udqState.add_assign("FUPRODGO", UDQSet::field("FUPRODGO", corrected));
-                summaryState.set("FUPRODGO", corrected);
-            }
-        }
-
-        for (const auto& [key, parentValue] : parentValues) {
-            const auto category = EclIO::SummaryNode::category_from_keyword(key);
-
-            if ((category == EclIO::SummaryNode::Category::Field)
-                && (key.size() >= 2)
-                && (key[0] == 'F')
-                && (key[1] == 'U')
-                && udqState.has(key)
-                && haveParentFieldOil)
-            {
-                const auto corrected = parentValue - (parentFieldOilIt->second - localFieldOil);
-                if (std::isfinite(corrected)) {
-                    udqState.add_assign(key, UDQSet::field(key, corrected));
-                    summaryState.set(key, corrected);
-                }
-            }
-
-            if (category != EclIO::SummaryNode::Category::Group) {
-                continue;
-            }
-
-            const auto firstColon = key.find(':');
-            if (firstColon == std::string::npos) {
-                continue;
-            }
-
-            const auto udqName = key.substr(0, firstColon);
-            const auto groupName = key.substr(firstColon + 1);
-            if ((udqName.size() < 2) || (udqName[0] != 'G') || (udqName[1] != 'U')) {
-                continue;
-            }
-
-            if (!udqState.has_group_var(groupName, udqName)) {
-                continue;
-            }
-
-            const auto parentGroupOilIt = parentValues.find("GOPR:" + groupName);
-            if ((parentGroupOilIt == parentValues.end()) || !std::isfinite(parentGroupOilIt->second)) {
-                continue;
-            }
-
-            double localGroupOil = 0.0;
-            for (const auto& wellName : localWells) {
-                if (!wellBelongsToGroup(wellName, groupName)) {
-                    continue;
-                }
-
-                const auto oil = oilRateForWell(wellName);
-                if (std::isfinite(oil)) {
-                    localGroupOil += oil;
-                }
-            }
-
-            const auto corrected = parentValue - (parentGroupOilIt->second - localGroupOil);
-            if (!std::isfinite(corrected)) {
-                continue;
-            }
-
-            auto singleGroupSet = UDQSet::groups(udqName, std::vector<std::string>{groupName});
-            singleGroupSet.assign(groupName, corrected);
-            udqState.add_assign(udqName, singleGroupSet);
-            summaryState.set(key, corrected);
         }
     }
 
@@ -710,26 +441,46 @@ public:
         return localWells;
     }
 
-    //! \brief Remove the contribution of wells outside the region from group
-    //!        production targets.
-    //! \details A group target in the parent deck is shared by every member of
-    //!          the group. The sector only holds the members inside the region,
-    //!          so the target has to be reduced by what the remaining members
-    //!          produced in the parent run, otherwise the sector wells take over
-    //!          the whole group target.
-    //!
-    //!          Only the SummaryState is adjusted. The UDQ state is left alone
-    //!          so that recursive UDQ definitions keep evaluating as they do in
-    //!          the parent run.
-    void applyFluxGroupTargetCorrection_(const int episodeIdx)
+    //! \brief Names of the wells that take no part in the sector run.
+    std::vector<std::string> fluxAbsentWellNames_(const std::size_t stepIdx) const
     {
-        const auto* fluxData = this->fluxBoundaryData_();
-        const auto* fluxStep = this->fluxBoundaryReportStep_();
-        if (!fluxData || !fluxStep || fluxData->summaryKeys.empty()) {
-            return;
+        const auto localWells = this->fluxLocalWellNames_(stepIdx);
+        const auto& schedule = this->simulator().vanguard().schedule();
+
+        std::vector<std::string> absentWells;
+        for (const auto& wellName : schedule.wellNames(stepIdx)) {
+            const auto isLocal = std::find(localWells.begin(), localWells.end(), wellName)
+                != localWells.end();
+
+            if (!isLocal) {
+                absentWells.push_back(wellName);
+            }
         }
 
-        if (fluxData->summaryKeys.size() != fluxStep->summaryValues.size()) {
+        return absentWells;
+    }
+
+    //! \brief Remove the contribution of wells outside the region from group
+    //!        production targets.
+    //!
+    //! \details A group target in the parent deck is shared by every member of
+    //!          the group, but the sector only holds the members that lie
+    //!          inside the region. Seeding the summary state cannot fix this on
+    //!          its own: the target is a whole-group quantity, so without a
+    //!          reduction the sector members would take over the entire group
+    //!          target and produce far too much.
+    //!
+    //!          The reduction is the parent run's production from the absent
+    //!          members, interpolated to the current time.
+    //!
+    //!          Only the SummaryState is adjusted. The UDQ state is left alone
+    //!          so that recursive UDQ definitions keep evaluating exactly as
+    //!          they do in the parent run, and so that the subtraction cannot
+    //!          compound from one time step to the next.
+    void applyFluxGroupTargetCorrection_(const int episodeIdx, const double time)
+    {
+        const auto* parent = this->fluxParentSummary_();
+        if ((parent == nullptr) || (episodeIdx < 0)) {
             return;
         }
 
@@ -739,25 +490,7 @@ public:
         const auto& schedule = vanguard.schedule();
         const auto stepIdx = static_cast<std::size_t>(episodeIdx);
 
-        std::unordered_map<std::string, double> parentValues;
-        parentValues.reserve(fluxData->summaryKeys.size());
-        for (std::size_t index = 0; index < fluxData->summaryKeys.size(); ++index) {
-            parentValues.emplace(fluxData->summaryKeys[index], fluxStep->summaryValues[index]);
-        }
-
-        const auto localWells = this->fluxLocalWellNames_(stepIdx);
-        const auto isLocal = [&localWells](const std::string& wellName)
-        {
-            return std::find(localWells.begin(), localWells.end(), wellName) != localWells.end();
-        };
-
-        std::vector<std::string> absentWells;
-        for (const auto& wellName : schedule.wellNames(stepIdx)) {
-            if (!isLocal(wellName)) {
-                absentWells.push_back(wellName);
-            }
-        }
-
+        const auto absentWells = this->fluxAbsentWellNames_(stepIdx);
         if (absentWells.empty()) {
             return;
         }
@@ -821,9 +554,9 @@ public:
                     continue;
                 }
 
-                const auto it = parentValues.find(ratePrefix + wellName);
-                if ((it != parentValues.end()) && std::isfinite(it->second)) {
-                    absentRate += it->second;
+                const auto rate = parent->valueAt(ratePrefix + wellName, time);
+                if (std::isfinite(rate)) {
+                    absentRate += rate;
                 }
             }
 
@@ -862,13 +595,13 @@ public:
     {
         FlowProblemType::beginTimeStep();
 
+        // Seed the summary state from the parent run before anything reads it.
         // UDA group targets may be driven by UDQs that evolve on every time
-        // step, so the correction for wells outside the region has to follow
-        // the same cadence rather than being applied once per report step.
-        const int episodeIdx = this->simulator().episodeIndex();
-        if (episodeIdx >= 0) {
-            this->applyFluxGroupTargetCorrection_(episodeIdx);
-        }
+        // step, so this has to follow the time step cadence rather than being
+        // applied once per report step.
+        const auto time = this->fluxParentSummaryTime_();
+        this->seedParentSummaryState_(time);
+        this->applyFluxGroupTargetCorrection_(this->simulator().episodeIndex(), time);
 
         hybridNewton_.tryApplyHybridNewton();
     }

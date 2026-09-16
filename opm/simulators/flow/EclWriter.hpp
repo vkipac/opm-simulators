@@ -32,10 +32,16 @@
 
 #include <opm/common/TimingMacros.hpp> // OPM_TIMEBLOCK
 #include <opm/common/OpmLog/OpmLog.hpp>
+#include <opm/input/eclipse/Schedule/Action/Actions.hpp>
+#include <opm/input/eclipse/Schedule/Action/ActionX.hpp>
 #include <opm/input/eclipse/Schedule/RPTConfig.hpp>
+#include <opm/input/eclipse/Schedule/UDQ/UDQConfig.hpp>
 
+#include <opm/input/eclipse/Units/Units.hpp>
 #include <opm/input/eclipse/Units/UnitSystem.hpp>
 #include <opm/input/eclipse/EclipseState/SummaryConfig/SummaryConfig.hpp>
+
+#include <opm/io/eclipse/SummaryNode.hpp>
 
 #include <opm/output/eclipse/Inplace.hpp>
 #include <opm/output/eclipse/RegionVariableCollection.hpp>
@@ -48,6 +54,7 @@
 #include <opm/simulators/flow/countGlobalCells.hpp>
 #include <opm/simulators/flow/EclGenericWriter.hpp>
 #include <opm/simulators/flow/FlowBaseVanguard.hpp>
+#include <opm/simulators/flow/FlowProblemParameters.hpp>
 #include <opm/simulators/flow/flux/FluxDumper.hpp>
 #include <opm/simulators/flow/flux/FluxRegions.hpp>
 #include <opm/simulators/timestepping/SimulatorTimer.hpp>
@@ -75,6 +82,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -164,6 +172,14 @@ public:
              "(i.e., using a separate thread).");
         Parameters::Register<Parameters::EnableEsmry>
             ("Write ESMRY file for fast loading of summary data.");
+        Parameters::Register<Parameters::FluxSummaryMinIntervalBetweenSamples<Scalar>>
+            ("Minimum time in days between consecutive parent summary samples "
+             "written to the .FLUX file by a DUMPFLUX run. Every time step is "
+             "sampled unless that would place the sample within this interval "
+             "of the previous one; report step boundaries are always sampled. "
+             "Smaller values improve the accuracy of the interpolation done by "
+             "a USEFLUX run, at the cost of a larger .FLUX file. Use 0 to "
+             "sample every time step.");
     }
 
     // The Simulator object should preferably have been const - the
@@ -273,7 +289,7 @@ public:
                 (this->simulator_.timeStepSize(), *conn_opt_ix, regVars);
         }
 
-        const auto localWellData            = simulator_.problem().wellModel().wellData();
+        auto localWellData                  = simulator_.problem().wellModel().wellData();
         const auto localWBP                 = simulator_.problem().wellModel().wellBlockAveragePressures();
         const auto localGroupAndNetworkData = simulator_.problem().wellModel()
             .groupAndNetworkData(reportStepNum);
@@ -373,6 +389,16 @@ public:
             // ranks.
             regVars.commitValues();
 
+            // Wells outside the USEFLUX region take no part in the reduced run,
+            // so without this the field and group aggregates would only cover
+            // the sector. Filling in their rates from the parent run lets
+            // Summary::eval() form F* and G* vectors over the union of sector
+            // and parent-only wells through its normal code path.
+            this->injectParentOnlyWellData_(this->collectOnIORank_.isParallel()
+                                            ? this->collectOnIORank_.globalWellData()
+                                            : localWellData,
+                                            curTime);
+
             const auto& blockData = this->collectOnIORank_.isParallel()
                 ? this->collectOnIORank_.globalBlockData()
                 : this->outputModule_->getBlockData();
@@ -404,6 +430,10 @@ public:
                               this->udqState(),
                               rcGroupRates ? &(*rcGroupRates) : nullptr);
         }
+
+        // The SummaryState is now fully populated for this step, so the
+        // DUMPFLUX summary snapshot can be taken.
+        this->sampleFluxSummary_(isSubStep, curTime);
     }
 
     //! \brief Writes the initial FIP report as configured in RPTSOL.
@@ -1245,6 +1275,51 @@ private:
         OpmLog::note("DUMPFLUX bootstrap: initialized "
                      + std::to_string(this->fluxDumpers_.size())
                  + " region dumper(s) from FLUXNUM");
+
+        this->initializeFluxSummarySampling_();
+    }
+
+    // Establish the fixed set of parent summary vectors embedded in the .FLUX
+    // file, together with the sampling throttle.
+    void initializeFluxSummarySampling_()
+    {
+        if (this->fluxDumpers_.empty()) {
+            return;
+        }
+
+        const auto intervalInDays = Parameters::Get<
+            Parameters::FluxSummaryMinIntervalBetweenSamples<Scalar>>();
+
+        this->fluxSummaryMinInterval_ =
+            unit::convert::from(static_cast<double>(intervalInDays), unit::day);
+
+        this->fluxSummaryKeyList_ = this->fluxSummaryKeys_();
+
+        this->fluxSummaryKeyTypes_.clear();
+        this->fluxSummaryKeyTypes_.reserve(this->fluxSummaryKeyList_.size());
+        for (const auto& key : this->fluxSummaryKeyList_) {
+            const auto colon = key.find(':');
+            const auto keyword = (colon == std::string::npos)
+                ? key
+                : key.substr(0, colon);
+
+            this->fluxSummaryKeyTypes_.push_back(parseKeywordType(keyword));
+        }
+
+        this->fluxSummaryRateAccum_.assign(this->fluxSummaryKeyList_.size(), 0.0);
+        this->fluxSummaryAccumDt_ = 0.0;
+        this->fluxSummaryLastSampleTime_ = 0.0;
+        this->fluxSummaryHasSample_ = false;
+
+        for (auto& dumper : this->fluxDumpers_) {
+            dumper.setSummaryKeys(this->fluxSummaryKeyList_);
+            dumper.setSummaryMinSampleInterval(this->fluxSummaryMinInterval_);
+        }
+
+        OpmLog::note(fmt::format("DUMPFLUX will embed {} summary vector(s), "
+                                 "sampled at most every {} day(s)",
+                                 this->fluxSummaryKeyList_.size(),
+                                 intervalInDays));
     }
 
     // The FLORES buffers owned by the output module are moved into the restart
@@ -1372,8 +1447,6 @@ private:
                ? FluidSystem::gasPhaseIdx
                : FluidSystem::waterPhaseIdx);
         const auto& vanguard = this->simulator_.vanguard();
-        const auto summaryKeys = this->fluxSummaryKeys_();
-        const auto summaryValues = this->fluxSummaryValues_(summaryKeys);
 
         if (!flows.anyFlores() && !this->fluxMissingFloresReported_) {
             const auto anyFluxMode =
@@ -1402,10 +1475,6 @@ private:
 
         for (std::size_t dumperIdx = 0; dumperIdx < this->fluxDumpers_.size(); ++dumperIdx) {
             auto& dumper = this->fluxDumpers_[dumperIdx];
-            dumper.setSummaryKeys(summaryKeys);
-            if (dumper.data().summaryKeys.size() != summaryKeys.size()) {
-                throw std::runtime_error("DUMPFLUX failed to register summary keys before append");
-            }
 
             auto step = dumper.makeZeroFluxStep(reportStepNum,
                                                 simStep,
@@ -1509,13 +1578,6 @@ private:
                 }
             }
 
-            step.summaryValues = summaryValues;
-            if (step.summaryValues.size() != dumper.data().summaryKeys.size()) {
-                throw std::runtime_error("DUMPFLUX summary key/value size mismatch before append: keys="
-                                         + std::to_string(dumper.data().summaryKeys.size())
-                                         + " values=" + std::to_string(step.summaryValues.size()));
-            }
-
             dumper.appendReportStep(step);
         }
 
@@ -1538,13 +1600,86 @@ private:
 
     std::vector<std::string> fluxSummaryKeys_() const
     {
-        std::vector<std::string> keys;
-        const auto& summaryConfig = this->eclIO_->finalSummaryConfig();
-        keys.reserve(summaryConfig.size());
+        const auto& schedule = this->simulator_.vanguard().schedule();
 
-        for (const auto& node : summaryConfig) {
-            keys.push_back(node.uniqueNodeKey());
+        auto keywords = std::unordered_set<std::string>{};
+
+        const auto addAll = [&keywords](std::initializer_list<const char*> names)
+        {
+            for (const auto* name : names) {
+                keywords.insert(name);
+            }
+        };
+
+        // Surface rates and cumulatives for the conserved quantities of every
+        // active phase. A USEFLUX run needs these to reconstruct the
+        // contribution of wells that fall outside the sector.
+        if (FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)) {
+            addAll({"WOPR", "WOPT", "WOIR", "WOIT"});
         }
+        if (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)) {
+            addAll({"WWPR", "WWPT", "WWIR", "WWIT"});
+        }
+        if (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
+            addAll({"WGPR", "WGPT", "WGIR", "WGIT"});
+        }
+
+        // Reservoir volume rates and cumulatives.
+        addAll({"WVPR", "WVPT", "WVIR", "WVIT"});
+
+        // Everything referenced by the deck's UDQ DEFINE expressions and by
+        // ACTIONX conditions, so that both can be evaluated through the
+        // standard code paths in the reduced run.
+        for (const auto& udq : schedule.template unique<UDQConfig>()) {
+            udq.second.required_summary(keywords);
+        }
+
+        for (const auto& action : schedule.back().actions.get()) {
+            action.required_summary(keywords);
+        }
+
+        // required_summary() yields bare keywords, so expand the well and
+        // group level ones over the objects they can apply to.
+        const auto& wells = schedule.wellNames();
+        const auto& groups = schedule.groupNames();
+
+        auto keys = std::vector<std::string>{};
+        keys.reserve(keywords.size());
+
+        for (const auto& keyword : keywords) {
+            if (keyword.empty()) {
+                continue;
+            }
+
+            switch (EclIO::SummaryNode::category_from_keyword(keyword)) {
+            case EclIO::SummaryNode::Category::Well:
+                for (const auto& well : wells) {
+                    keys.push_back(keyword + ':' + well);
+                }
+                break;
+
+            case EclIO::SummaryNode::Category::Group:
+                for (const auto& group : groups) {
+                    keys.push_back(keyword + ':' + group);
+                }
+                break;
+
+            case EclIO::SummaryNode::Category::Field:
+            case EclIO::SummaryNode::Category::Miscellaneous:
+                keys.push_back(keyword);
+                break;
+
+            default:
+                // Region, block, connection, segment, aquifer and node level
+                // quantities are evaluated locally by the reduced run and are
+                // not expandable without further context.
+                break;
+            }
+        }
+
+        std::sort(keys.begin(), keys.end());
+        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+
         return keys;
     }
 
@@ -1555,10 +1690,135 @@ private:
 
         const auto& summaryState = this->summaryState();
         for (const auto& key : keys) {
-            values.push_back(summaryState.get(key, summaryState.get_udq_undefined()));
+            values.push_back(summaryState.get(key, 0.0));
         }
 
         return values;
+    }
+
+    // Take one snapshot of the parent summary vectors for the DUMPFLUX file.
+    //
+    // Called once per time step, after Summary::eval() has populated the
+    // SummaryState. Rate-type quantities are accumulated over every step and
+    // emitted as a time-average over the interval since the previous retained
+    // sample, so that a USEFLUX run holding the value piecewise-constant
+    // across that interval reproduces this run's production over it exactly.
+    void sampleFluxSummary_(const bool isSubStep, const Scalar sampleTime)
+    {
+        if (this->fluxDumpers_.empty() || !this->collectOnIORank_.isIORank()) {
+            return;
+        }
+
+        const auto& keys = this->fluxSummaryKeyList_;
+        if (keys.empty()) {
+            return;
+        }
+
+        const auto values = this->fluxSummaryValues_(keys);
+        const auto dt = static_cast<double>(this->simulator_.timeStepSize());
+
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+            if (this->fluxSummaryKeyTypes_[i] == SummaryConfigNode::Type::Rate) {
+                this->fluxSummaryRateAccum_[i] += values[i] * dt;
+            }
+        }
+        this->fluxSummaryAccumDt_ += dt;
+
+        const auto elapsed = static_cast<double>(sampleTime) - this->fluxSummaryLastSampleTime_;
+        const bool retain = !this->fluxSummaryHasSample_
+            || !isSubStep
+            || (elapsed >= this->fluxSummaryMinInterval_);
+
+        if (!retain) {
+            return;
+        }
+
+        auto sample = values;
+        if (this->fluxSummaryAccumDt_ > 0.0) {
+            for (std::size_t i = 0; i < keys.size(); ++i) {
+                if (this->fluxSummaryKeyTypes_[i] == SummaryConfigNode::Type::Rate) {
+                    sample[i] = this->fluxSummaryRateAccum_[i] / this->fluxSummaryAccumDt_;
+                }
+            }
+        }
+
+        for (auto& dumper : this->fluxDumpers_) {
+            dumper.appendSummarySample(static_cast<double>(sampleTime), sample);
+        }
+
+        std::fill(this->fluxSummaryRateAccum_.begin(), this->fluxSummaryRateAccum_.end(), 0.0);
+        this->fluxSummaryAccumDt_ = 0.0;
+        this->fluxSummaryLastSampleTime_ = static_cast<double>(sampleTime);
+        this->fluxSummaryHasSample_ = true;
+    }
+
+    // Fill in the rates of wells that lie outside the USEFLUX region from the
+    // parent run, so that summary aggregation covers the whole field.
+    //
+    // Three conventions matter here: data::Rates holds production as NEGATIVE
+    // values, it is expressed in SI units while summary vectors are in the
+    // deck's output units, and Summary::eval() skips any well whose dynamic
+    // status is SHUT - which is exactly what a well with no active connection
+    // would otherwise be.
+    void injectParentOnlyWellData_(data::Wells& wellData, const Scalar time)
+    {
+        const auto* parent = this->simulator_.problem().fluxParentSummary();
+        if (parent == nullptr) {
+            return;
+        }
+
+        const auto& vanguard = this->simulator_.vanguard();
+        const auto& schedule = vanguard.schedule();
+        const auto& units = vanguard.eclState().getUnits();
+        const auto stepIdx =
+            static_cast<std::size_t>(std::max(this->simulator_.episodeIndex(), 0));
+
+        for (const auto& wellName : schedule.wellNames(stepIdx)) {
+            const auto& well = schedule.getWell(wellName, stepIdx);
+
+            const auto hasLocalConnection =
+                std::any_of(well.getConnections().begin(), well.getConnections().end(),
+                            [&vanguard](const auto& conn)
+                            {
+                                return vanguard.compressedIndex(conn.global_index()) >= 0;
+                            });
+
+            if (hasLocalConnection) {
+                continue;
+            }
+
+            const auto isProducer = well.isProducer();
+            const auto sign = isProducer ? -1.0 : 1.0;
+
+            auto& target = wellData[wellName];
+            target.dynamicStatus = Well::Status::OPEN;
+
+            const auto assign = [&](const data::Rates::opt opt,
+                                    const UnitSystem::measure measure,
+                                    const std::string& prodKeyword,
+                                    const std::string& injKeyword)
+            {
+                const auto key = (isProducer ? prodKeyword : injKeyword) + ':' + wellName;
+                const auto value = parent->valueAt(key, static_cast<double>(time));
+
+                if (std::isfinite(value)) {
+                    target.rates.set(opt, sign * units.to_si(measure, value));
+                }
+            };
+
+            if (FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)) {
+                assign(data::Rates::opt::oil, UnitSystem::measure::liquid_surface_rate,
+                       "WOPR", "WOIR");
+            }
+            if (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)) {
+                assign(data::Rates::opt::wat, UnitSystem::measure::liquid_surface_rate,
+                       "WWPR", "WWIR");
+            }
+            if (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
+                assign(data::Rates::opt::gas, UnitSystem::measure::gas_surface_rate,
+                       "WGPR", "WGIR");
+            }
+        }
     }
 
     Simulator& simulator_;
@@ -1572,6 +1832,13 @@ private:
     std::vector<std::vector<double>> fluxCapturedFaceRates_;
     std::vector<std::vector<std::vector<double>>> fluxRateSnapshots_;
     std::vector<double> fluxRateTimeWeights_;
+    std::vector<std::string> fluxSummaryKeyList_;
+    std::vector<SummaryConfigNode::Type> fluxSummaryKeyTypes_;
+    std::vector<double> fluxSummaryRateAccum_;
+    double fluxSummaryAccumDt_ = 0.0;
+    double fluxSummaryLastSampleTime_ = 0.0;
+    double fluxSummaryMinInterval_ = 0.0;
+    bool fluxSummaryHasSample_ = false;
     bool fluxMissingFloresReported_ = false;
     bool fluxTransmissibilitiesAssigned_ = false;
 };

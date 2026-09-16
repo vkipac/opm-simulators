@@ -1268,7 +1268,14 @@ int run(const Options& opt)
             const double currentTime = summaryPayload->reportTimes[summaryStepIdx] * secondsPerDay;
             step.startTime = previousTime;
             step.stepLength = currentTime - previousTime;
-            step.summaryValues = summaryPayload->valuesPerStep[summaryStepIdx];
+
+            // Summary samples form their own series; emit one per parent step.
+            // Taking every available step means each stored rate is already
+            // the parent's average over that step, which is what the v2 format
+            // requires of rate-type entries.
+            dumper.appendSummarySample(currentTime,
+                                       summaryPayload->valuesPerStep[summaryStepIdx]);
+
             previousTime = currentTime;
         }
 

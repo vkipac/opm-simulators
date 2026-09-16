@@ -21,8 +21,11 @@
 
 #include <opm/common/ErrorMacros.hpp>
 
+#include <fmt/format.h>
+
 #include <algorithm>
 #include <sstream>
+#include <stdexcept>
 #include <utility>
 
 namespace Opm {
@@ -227,7 +230,6 @@ void FluxDumper::appendReportStep(const ReportStepData& stepData)
     step.rs = stepData.rs;
     step.rv = stepData.rv;
     step.temperature = stepData.temperature;
-    step.summaryValues = stepData.summaryValues;
 
     if (!step.temperature.empty()) {
         this->data_.header.hasTemperature = true;
@@ -245,6 +247,29 @@ void FluxDumper::write(const std::string& filename, const bool formatted) const
 void FluxDumper::setSummaryKeys(std::vector<std::string> summaryKeys)
 {
     this->data_.summaryKeys = std::move(summaryKeys);
+    this->data_.header.numSummaryKeys = static_cast<int>(this->data_.summaryKeys.size());
+}
+
+void FluxDumper::appendSummarySample(const double time, std::vector<double> values)
+{
+    if (values.size() != this->data_.summaryKeys.size()) {
+        OPM_THROW(std::invalid_argument,
+                  fmt::format("FluxDumper summary sample must contain {} values, got {}",
+                              this->data_.summaryKeys.size(), values.size()));
+    }
+
+    auto& sample = this->data_.summarySamples.emplace_back();
+    sample.time = time;
+    sample.values = std::move(values);
+
+    this->data_.header.numSummarySamples =
+        static_cast<int>(this->data_.summarySamples.size());
+    this->data_.header.summaryPerTimestep = true;
+}
+
+void FluxDumper::setSummaryMinSampleInterval(const double interval)
+{
+    this->data_.header.summaryMinSampleInterval = interval;
 }
 
 const EclIO::FluxFile::Data& FluxDumper::data() const
@@ -351,10 +376,6 @@ void FluxDumper::validateStepData(const ReportStepData& stepData) const
         if (!stepData.temperature.empty()) {
             throwSizeError("temperature", 0, stepData.temperature.size());
         }
-    }
-
-    if (stepData.summaryValues.size() != this->data_.summaryKeys.size()) {
-        throwSizeError("summaryValues", this->data_.summaryKeys.size(), stepData.summaryValues.size());
     }
 }
 

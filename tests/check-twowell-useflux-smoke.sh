@@ -21,10 +21,25 @@ cp "$consumer_deck" "${consumer_base}.DATA"
 
 grep -q "End of simulation" twowell_use.log
 
+# The sector must report where it read the parent's summary vectors from.
+grep -q "USEFLUX: summary vectors loaded from flux file" twowell_use.log
+
 # Compare on report steps only. The FLUX payload carries the parent's summary
 # values once per report step, while the UDQ in this deck advances on every
 # time step, so the sector can only reproduce the parent at report step
 # boundaries - which is where the exchanged boundary data is defined.
 for keyword in WOPR:P1 WBHP:P1; do
+    "$compare_bin" -d -t SMRY -k "$keyword" "$producer_base" "$consumer_base" 2e-2 2e-2
+done
+
+# Field and group aggregates must match the parent even though P2 lies outside
+# the sector: its rates are injected into the summary aggregation from the
+# parent run. WOPR:P2 is reported straight from the parent series.
+#
+# The cumulatives are the sharper check of the two. They are built by
+# accumulation rather than assignment, so a cumulative that was seeded instead
+# of accumulated would show up here as double counting even when the rates
+# still agree.
+for keyword in FOPR FOPT GOPR:G1 GOPT:G1 WOPR:P2 WOPT:P1 WOPT:P2; do
     "$compare_bin" -d -t SMRY -k "$keyword" "$producer_base" "$consumer_base" 2e-2 2e-2
 done

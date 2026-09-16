@@ -130,6 +130,7 @@ list (APPEND MAIN_SOURCE_FILES
   opm/simulators/flow/flux/FluxBoundary.cpp
   opm/simulators/flow/flux/FluxDumper.cpp
   opm/simulators/flow/flux/FluxRegions.cpp
+  opm/simulators/flow/flux/ParentSummary.cpp
   opm/simulators/flow/HybridNewtonConfig.cpp
   opm/simulators/flow/InterRegFlows.cpp
   opm/simulators/flow/KeywordValidation.cpp
@@ -492,6 +493,7 @@ list (APPEND TEST_SOURCE_FILES
   tests/test_FluxBoundary.cpp
   tests/test_FluxDumper.cpp
   tests/test_FluxRegions.cpp
+  tests/test_ParentSummary.cpp
   tests/test_injection_topup_phase_validation.cpp
   tests/test_interregflows.cpp
   tests/test_invert.cpp
@@ -1074,6 +1076,7 @@ list (APPEND PUBLIC_HEADER_FILES
   opm/simulators/flow/flux/FluxRegions.hpp
   opm/simulators/flow/flux/FluxActivation.hpp
   opm/simulators/flow/flux/FluxBoundary.hpp
+  opm/simulators/flow/flux/ParentSummary.hpp
   opm/simulators/flow/partitionCells.hpp
   opm/simulators/flow/PolyhedralGridVanguard.hpp
   opm/simulators/flow/priVarsPacking.hpp

@@ -60,6 +60,7 @@
 // TODO: maybe we can name it FlowProblemProperties.hpp
 #include <opm/simulators/flow/FlowBaseProblemProperties.hpp>
 #include <opm/simulators/flow/flux/FluxBoundary.hpp>
+#include <opm/simulators/flow/flux/ParentSummary.hpp>
 #include <opm/simulators/flow/FlowUtils.hpp>
 #include <opm/simulators/flow/TracerModel.hpp>
 #include <opm/simulators/flow/TemperatureModel.hpp>
@@ -1448,6 +1449,19 @@ protected:
         return FluxBoundary::selectReportStep(*data, this->episodeIndex());
     }
 
+    //! \brief The parent run's summary vectors, or nullptr when unavailable.
+    const ParentSummary* fluxParentSummary_() const
+    {
+        return this->fluxParentSummaryData_.get();
+    }
+
+    //! \brief Simulation time, in seconds, at which the parent summary should    //!        be sampled for the step that is about to be taken.
+    double fluxParentSummaryTime_() const
+    {
+        return static_cast<double>(this->simulator().time())
+            + static_cast<double>(this->simulator().timeStepSize());
+    }
+
 public:
 
     template<class Serializer>
@@ -1464,6 +1478,15 @@ public:
     const GlobalEqVector& drift() const
     {
         return drift_;
+    }
+
+    //! \brief The parent run's summary vectors, or nullptr when unavailable.
+    //!
+    //! \details Only populated in a USEFLUX run for which a parent summary
+    //!          source could be located.
+    const ParentSummary* fluxParentSummary() const
+    {
+        return this->fluxParentSummaryData_.get();
     }
 
 private:
@@ -1947,6 +1970,61 @@ protected:
         if (!this->fluxBoundary_->faces().empty()) {
             this->nonTrivialBoundaryConditions_ = true;
         }
+
+        this->loadFluxParentSummary_(fluxData, selectedFluxPath, inputDir, baseName);
+    }
+
+    //! \brief Establish where the reduced run reads the parent run's summary
+    //!        vectors from.
+    //! \details The vectors embedded in the .FLUX file are preferred because
+    //!          they are sampled at sub-report-step resolution and their rate
+    //!          entries are interval averages. Otherwise fall back to the
+    //!          parent run's own summary output. Either way, say so in the log:
+    //!          the two sources have different time resolution and the choice
+    //!          affects the accuracy of the reduced run.
+    void loadFluxParentSummary_(const EclIO::FluxFile::Data&  fluxData,
+                                const std::filesystem::path&  fluxPath,
+                                const std::filesystem::path&  inputDir,
+                                const std::string&            baseName)
+    {
+        this->fluxParentSummaryData_.reset();
+
+        if (auto embedded = ParentSummary::fromFluxFile(fluxData, fluxPath.string());
+            embedded.has_value())
+        {
+            OpmLog::info(fmt::format("USEFLUX: summary vectors loaded from flux file '{}' "
+                                     "({} keys, {} samples)",
+                                     fluxPath.string(),
+                                     embedded->keys().size(),
+                                     embedded->times().size()));
+
+            this->fluxParentSummaryData_ =
+                std::make_shared<ParentSummary>(std::move(*embedded));
+            return;
+        }
+
+        for (const auto* extension : {".ESMRY", ".SMSPEC", ".FSMSPEC"}) {
+            const auto candidate = inputDir / (baseName + extension);
+
+            if (auto external = ParentSummary::fromSummaryFile(candidate);
+                external.has_value())
+            {
+                OpmLog::info(fmt::format("USEFLUX: summary vectors loaded from parent "
+                                         "summary file '{}' ({} keys, {} samples)",
+                                         candidate.string(),
+                                         external->keys().size(),
+                                         external->times().size()));
+
+                this->fluxParentSummaryData_ =
+                    std::make_shared<ParentSummary>(std::move(*external));
+                return;
+            }
+        }
+
+        OpmLog::warning("USEFLUX: no parent summary vectors available, neither embedded "
+                        "in the flux file nor as a parent summary file next to it. "
+                        "Field and group aggregates will only reflect the wells inside "
+                        "the sector.");
     }
 
     // The FLUX file stores total volumetric rates across each boundary face,
@@ -2185,6 +2263,7 @@ protected:
     BCData<int> fluxBoundaryFaceIndex_;
     BCData<Scalar> fluxBoundaryFaceArea_;
     std::shared_ptr<FluxBoundary> fluxBoundary_;
+    std::shared_ptr<ParentSummary> fluxParentSummaryData_;
     bool nonTrivialBoundaryConditions_ = false;
     bool first_step_ = true;
 

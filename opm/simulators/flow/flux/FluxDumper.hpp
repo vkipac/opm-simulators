@@ -49,7 +49,6 @@ public:
         std::vector<double> rs;
         std::vector<double> rv;
         std::vector<double> temperature;
-        std::vector<double> summaryValues;
     };
 
     FluxDumper(std::string parentCaseName,
@@ -77,6 +76,20 @@ public:
     void appendReportStep(const ReportStepData& stepData);
     void write(const std::string& filename, bool formatted = false) const;
     void setSummaryKeys(std::vector<std::string> summaryKeys);
+
+    /// Append one snapshot of the parent summary vectors.
+    ///
+    /// Samples are independent of the report-step sequence.  \p time is the
+    /// end of the interval the sample represents, in seconds, and \p values
+    /// must have one entry per registered summary key.  Rate-type entries
+    /// are expected to be time-averaged over the interval since the previous
+    /// sample; see EclIO::FluxFile::SummarySample.
+    void appendSummarySample(double time, std::vector<double> values);
+
+    /// Record the minimum interval, in seconds, enforced between consecutive
+    /// summary samples.  Diagnostic only.
+    void setSummaryMinSampleInterval(double interval);
+
     void setBoundaryTransmissibilities(const std::vector<double>& boundaryTransmissibilities);
 
     const EclIO::FluxFile::Data& data() const;
