@@ -1198,7 +1198,12 @@ private:
             return;
         }
 
-        const auto& regionValues = fieldProps.get_int("FLUXNUM");
+        // FLUXNUM is dimensioned over every cell of the grid, active or not,
+        // so it has to be read with the global accessor rather than the one
+        // that returns a value per active cell. ACTNUM is passed alongside it
+        // so that inactive cells are kept out of the region.
+        const auto regionValues = fieldProps.get_global_int("FLUXNUM");
+        const auto& actnum = fieldProps.actnumRaw();
         const auto dims = state.gridDims().getNXYZ();
 
         std::vector<std::array<int, 2>> nncConnections;
@@ -1236,7 +1241,7 @@ private:
             }
         }
 
-        const auto regions = FluxRegions::extract(dims, regionValues, nncConnections);
+        const auto regions = FluxRegions::extract(dims, regionValues, actnum, nncConnections);
         if (regions.empty()) {
             return;
         }
@@ -1418,8 +1423,12 @@ private:
                     continue;
                 }
 
-                trans[i] = problem.transmissibility(static_cast<unsigned>(interior),
-                                                    static_cast<unsigned>(exterior));
+                // Cartesian adjacency does not imply a connection: faults with
+                // throw and pinched-out cells leave neighbouring active cells
+                // with no shared face, and hence no transmissibility. Such a
+                // face carries no flow.
+                trans[i] = problem.transmissibilityOrZero(static_cast<unsigned>(interior),
+                                                          static_cast<unsigned>(exterior));
             }
 
             dumper.setBoundaryTransmissibilities(trans);

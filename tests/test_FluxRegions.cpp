@@ -187,3 +187,80 @@ BOOST_AUTO_TEST_CASE(ExtractsNncBoundaryFaces)
     BOOST_CHECK(region.boundaryFaces[0] == cartesianFace);
     BOOST_CHECK(region.boundaryFaces[1] == nncFace);
 }
+
+// The region map covers every cell of the grid, including the inactive ones.
+// An inactive cell holds no fluid and takes no part in the flow, so it must not
+// become part of the region: the consumer maps boundary faces onto active cells
+// by counting the entries of localToGlobal, and counting a cell that the sector
+// grid does not have would shift every later face onto the wrong cell.
+BOOST_AUTO_TEST_CASE(InactiveCellsAreExcludedFromTheRegion)
+{
+    const std::array<int, 3> dims{4, 1, 1};
+    std::vector<int> regions(dims[0] * dims[1] * dims[2], 0);
+    regions[globalIndex(dims, 2, 1, 1)] = 1;
+    regions[globalIndex(dims, 3, 1, 1)] = 1;
+
+    // Without ACTNUM both cells belong to the region.
+    {
+        const auto extracted = Opm::FluxRegions::extract(dims, regions);
+        BOOST_REQUIRE_EQUAL(extracted.size(), 1U);
+        BOOST_CHECK_EQUAL(extracted.front().selectedGlobalCells.size(), 2U);
+        BOOST_CHECK_EQUAL(extracted.front().localToGlobal.size(), 2U);
+    }
+
+    // Marking the second of them inactive leaves a one-cell region.
+    std::vector<int> actnum(dims[0] * dims[1] * dims[2], 1);
+    actnum[globalIndex(dims, 3, 1, 1)] = 0;
+
+    const auto extracted = Opm::FluxRegions::extract(dims, regions, actnum, {});
+    BOOST_REQUIRE_EQUAL(extracted.size(), 1U);
+
+    const auto& region = extracted.front();
+    BOOST_REQUIRE_EQUAL(region.selectedGlobalCells.size(), 1U);
+    BOOST_CHECK_EQUAL(region.selectedGlobalCells.front(), globalIndex(dims, 2, 1, 1));
+
+    // The bounding box shrinks with the region, so localToGlobal holds exactly
+    // the one active cell and nothing else.
+    const auto expectedBox = Opm::FluxRegions::Box{2, 2, 1, 1, 1, 1};
+    BOOST_CHECK(region.box == expectedBox);
+    BOOST_REQUIRE_EQUAL(region.localToGlobal.size(), 1U);
+    BOOST_CHECK_EQUAL(region.localToGlobal.front(), globalIndex(dims, 2, 1, 1));
+}
+
+// Nothing flows across a face towards an inactive cell, so that face is a
+// no-flow boundary rather than one the parent run has to supply data for.
+BOOST_AUTO_TEST_CASE(FacesTowardsInactiveCellsAreNotBoundaryFaces)
+{
+    const std::array<int, 3> dims{3, 1, 1};
+    std::vector<int> regions(dims[0] * dims[1] * dims[2], 0);
+    regions[globalIndex(dims, 2, 1, 1)] = 1;
+
+    // With every cell active the single region cell has two boundary faces.
+    {
+        const auto extracted = Opm::FluxRegions::extract(dims, regions);
+        BOOST_REQUIRE_EQUAL(extracted.size(), 1U);
+        BOOST_CHECK_EQUAL(extracted.front().boundaryFaces.size(), 2U);
+    }
+
+    // Deactivating the neighbour on one side removes that face.
+    std::vector<int> actnum(dims[0] * dims[1] * dims[2], 1);
+    actnum[globalIndex(dims, 1, 1, 1)] = 0;
+
+    const auto extracted = Opm::FluxRegions::extract(dims, regions, actnum, {});
+    BOOST_REQUIRE_EQUAL(extracted.size(), 1U);
+
+    const auto& faces = extracted.front().boundaryFaces;
+    BOOST_REQUIRE_EQUAL(faces.size(), 1U);
+    BOOST_CHECK_EQUAL(faces.front().exteriorGlobalCell, globalIndex(dims, 3, 1, 1));
+}
+
+BOOST_AUTO_TEST_CASE(RejectsActnumOfWrongSize)
+{
+    const std::array<int, 3> dims{3, 1, 1};
+    std::vector<int> regions(dims[0] * dims[1] * dims[2], 0);
+    regions[globalIndex(dims, 2, 1, 1)] = 1;
+
+    const std::vector<int> actnum(2, 1);
+    BOOST_CHECK_THROW(Opm::FluxRegions::extract(dims, regions, actnum, {}),
+                      std::invalid_argument);
+}

@@ -72,6 +72,24 @@ public:
                                        const std::vector<int>& regionValues,
                                        const std::vector<std::array<int, 2>>& nncConnections);
 
+    /// Extract the regions described by a full-grid region map.
+    ///
+    /// \param dims Parent grid dimensions.
+    ///
+    /// \param regionValues Full-grid region map, one entry per cell of the
+    ///   parent grid, active or not.
+    ///
+    /// \param actnum Full-grid ACTNUM, one entry per cell. Cells that are
+    ///   inactive never take part in the flow, so they are excluded from the
+    ///   region and a face towards one of them is a no-flow boundary rather
+    ///   than a flux boundary. Pass an empty vector when every cell is active.
+    ///
+    /// \param nncConnections Non-neighbour connections of the parent grid.
+    static std::vector<Region> extract(const std::array<int, 3>& dims,
+                                       const std::vector<int>& regionValues,
+                                       const std::vector<int>& actnum,
+                                       const std::vector<std::array<int, 2>>& nncConnections);
+
     static int uniqueSelectedRegion(const std::vector<int>& regionValues);
 
     static std::vector<int> buildActnum(const std::vector<int>& regionValues,

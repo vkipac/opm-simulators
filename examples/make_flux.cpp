@@ -1154,7 +1154,12 @@ int run(const Options& opt)
     const auto dims = gridDims(state);
     const auto& unitSystem = state.getDeckUnitSystem();
     const auto regionValues = parseMappingSpecification(opt, dims);
-    const auto regions = Opm::FluxRegions::extract(dims, regionValues);
+
+    // The mapping is given over every cell of the grid, so it also assigns a
+    // region to inactive cells. Hand ACTNUM to the extraction so that this
+    // tool builds the same region as an in-simulator DUMPFLUX run would.
+    const auto& actnum = state.globalFieldProps().actnumRaw();
+    const auto regions = Opm::FluxRegions::extract(dims, regionValues, actnum, {});
     if (regions.size() != 1U) {
         throw std::invalid_argument("mapping must define exactly one connected region");
     }

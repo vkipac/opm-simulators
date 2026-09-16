@@ -137,8 +137,14 @@ std::map<int, std::vector<int>> buildGlobalToLocal(const FluxRegions::Region& re
 
 void fillCartesianBoundaryFaces(const std::array<int, 3>& dims,
                                 FluxRegions::Region& region,
-                                const std::unordered_set<int>& selected)
+                                const std::unordered_set<int>& selected,
+                                const std::vector<int>& actnum)
 {
+    const auto isActive = [&actnum](const int global)
+    {
+        return actnum.empty() || (actnum[global] != 0);
+    };
+
     const auto globalToLocal = buildGlobalToLocal(region);
     for (const auto interiorGlobal : region.selectedGlobalCells) {
         const auto interiorIt = globalToLocal.find(interiorGlobal);
@@ -157,6 +163,13 @@ void fillCartesianBoundaryFaces(const std::array<int, 3>& dims,
 
             const auto neighbourGlobal = encodeGlobal(dims, nIJK);
             if (selected.count(neighbourGlobal) != 0) {
+                continue;
+            }
+
+            // Nothing flows across a face towards an inactive cell, so it is a
+            // no-flow boundary rather than one the parent run has to supply a
+            // rate or a pressure for.
+            if (!isActive(neighbourGlobal)) {
                 continue;
             }
 
@@ -234,10 +247,11 @@ void sortBoundaryFaces(std::vector<FluxRegions::BoundaryFace>& faces)
 
 void buildBoundaryFaces(const std::array<int, 3>& dims,
                         FluxRegions::Region& region,
+                        const std::vector<int>& actnum,
                         const std::vector<std::array<int, 2>>& nncConnections)
 {
     const auto selected = makeSelectionSet(region);
-    fillCartesianBoundaryFaces(dims, region, selected);
+    fillCartesianBoundaryFaces(dims, region, selected, actnum);
     fillNncBoundaryFaces(dims, region, selected, nncConnections);
     sortBoundaryFaces(region.boundaryFaces);
 }
@@ -260,11 +274,19 @@ int FluxRegions::localBoxIndex(const Box& box, const int i, const int j, const i
 std::vector<FluxRegions::Region> FluxRegions::extract(const std::array<int, 3>& dims,
                                                       const std::vector<int>& regionValues)
 {
-    return extract(dims, regionValues, {});
+    return extract(dims, regionValues, {}, {});
 }
 
 std::vector<FluxRegions::Region> FluxRegions::extract(const std::array<int, 3>& dims,
                                                       const std::vector<int>& regionValues,
+                                                      const std::vector<std::array<int, 2>>& nncConnections)
+{
+    return extract(dims, regionValues, {}, nncConnections);
+}
+
+std::vector<FluxRegions::Region> FluxRegions::extract(const std::array<int, 3>& dims,
+                                                      const std::vector<int>& regionValues,
+                                                      const std::vector<int>& actnum,
                                                       const std::vector<std::array<int, 2>>& nncConnections)
 {
     const auto numCells = dims[0] * dims[1] * dims[2];
@@ -272,6 +294,22 @@ std::vector<FluxRegions::Region> FluxRegions::extract(const std::array<int, 3>& 
         OPM_THROW(std::invalid_argument,
                   "FluxRegions::extract(): regionValues size must match grid dimensions");
     }
+
+    if (!actnum.empty() && (static_cast<int>(actnum.size()) != numCells)) {
+        OPM_THROW(std::invalid_argument,
+                  "FluxRegions::extract(): actnum size must match grid dimensions");
+    }
+
+    // The region map is dimensioned over every cell of the parent grid, so it
+    // also assigns a region to cells that are inactive. Those cells hold no
+    // fluid and take no part in the flow, so they must not become part of the
+    // region: the sector's active cells are the region combined with ACTNUM,
+    // and the local-to-active mapping the consumer builds from this file
+    // assumes exactly that set.
+    const auto isActive = [&actnum](const int global)
+    {
+        return actnum.empty() || (actnum[global] != 0);
+    };
 
     struct PendingRegion {
         Box box;
@@ -285,7 +323,7 @@ std::vector<FluxRegions::Region> FluxRegions::extract(const std::array<int, 3>& 
             for (int i = 0; i < dims[0]; ++i) {
                 const auto globalIndex = cartesianIndex(dims, i, j, k);
                 const auto regionId = regionValues[globalIndex];
-                if (regionId <= 0) {
+                if (regionId <= 0 || !isActive(globalIndex)) {
                     continue;
                 }
 
@@ -322,7 +360,7 @@ std::vector<FluxRegions::Region> FluxRegions::extract(const std::array<int, 3>& 
             region.localToGlobal[localBoxIndex(region.box, i + 1, j + 1, k + 1)] = globalIndex;
         }
 
-        buildBoundaryFaces(dims, region, nncConnections);
+        buildBoundaryFaces(dims, region, actnum, nncConnections);
 
         regions.push_back(std::move(region));
     }
