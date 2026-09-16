@@ -1905,7 +1905,7 @@ protected:
         }
 
         const auto inputDir = std::filesystem::path{ioConfig.getInputDir()};
-        const auto baseName = ioConfig.getBaseName();
+        const auto baseName = ioConfig.getUseFluxInputBaseName();
         const auto selectedFluxPath = FluxBoundary::selectInputPath(inputDir, baseName);
         if (!std::filesystem::exists(selectedFluxPath)) {
             std::ostringstream msg;

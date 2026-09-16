@@ -88,7 +88,7 @@ BOOST_AUTO_TEST_CASE(DoesNothingWithoutUseFlux)
 
 BOOST_AUTO_TEST_CASE(ActivatesOnlyTheSelectedFluxnumRegion)
 {
-    auto deck = makeDeck("FLUXNUM\n 1 0 1 /\nUSEFLUX /\n");
+    auto deck = makeDeck("FLUXNUM\n 1 0 1 /\nUSEFLUX\n 1* /\n");
     Opm::EclipseState eclipseState(deck);
 
     BOOST_CHECK(Opm::applyUseFluxActnum(eclipseState));
@@ -108,7 +108,7 @@ BOOST_AUTO_TEST_CASE(ActivatesOnlyTheSelectedFluxnumRegion)
 
 BOOST_AUTO_TEST_CASE(DoesNotReactivatePreviouslyInactiveCells)
 {
-    auto deck = makeDeck("ACTNUM\n 1 0 1 /\nFLUXNUM\n 1 1 1 /\nUSEFLUX /\n");
+    auto deck = makeDeck("ACTNUM\n 1 0 1 /\nFLUXNUM\n 1 1 1 /\nUSEFLUX\n 1* /\n");
     Opm::EclipseState eclipseState(deck);
 
     BOOST_CHECK(Opm::applyUseFluxActnum(eclipseState));
@@ -122,7 +122,7 @@ BOOST_AUTO_TEST_CASE(DoesNotReactivatePreviouslyInactiveCells)
 
 BOOST_AUTO_TEST_CASE(RejectsUseFluxWithoutFluxnum)
 {
-    auto deck = makeDeck("USEFLUX /\n");
+    auto deck = makeDeck("USEFLUX\n 1* /\n");
     Opm::EclipseState eclipseState(deck);
 
     BOOST_CHECK_THROW(Opm::applyUseFluxActnum(eclipseState), std::invalid_argument);
@@ -130,7 +130,7 @@ BOOST_AUTO_TEST_CASE(RejectsUseFluxWithoutFluxnum)
 
 BOOST_AUTO_TEST_CASE(ActivatesFromFluxregWhenFluxnumMissing)
 {
-    auto deck = makeDeck("FLUXREG\n 1 0 1 /\nUSEFLUX /\n");
+    auto deck = makeDeck("FLUXREG\n 1 0 1 /\nUSEFLUX\n 1* /\n");
     Opm::EclipseState eclipseState(deck);
 
     BOOST_CHECK(Opm::applyUseFluxActnum(eclipseState));
@@ -144,7 +144,7 @@ BOOST_AUTO_TEST_CASE(ActivatesFromFluxregWhenFluxnumMissing)
 
 BOOST_AUTO_TEST_CASE(RejectsAmbiguousFluxnumSelection)
 {
-    auto deck = makeDeck("FLUXNUM\n 1 2 0 /\nUSEFLUX /\n");
+    auto deck = makeDeck("FLUXNUM\n 1 2 0 /\nUSEFLUX\n 1* /\n");
     Opm::EclipseState eclipseState(deck);
 
     BOOST_CHECK_THROW(Opm::applyUseFluxActnum(eclipseState), std::invalid_argument);

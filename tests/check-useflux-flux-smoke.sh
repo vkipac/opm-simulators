@@ -9,7 +9,6 @@ if [[ ! -f FLUX_DUMP_USEFLUX_FLUX_SMOKE.FLUX ]]; then
     exit 1
 fi
 
-cp FLUX_DUMP_USEFLUX_FLUX_SMOKE.FLUX FLUX_USE_FLUX_SMOKE.FLUX
 cp "$consumer_deck" FLUX_USE_FLUX_SMOKE.DATA
 "$flow_bin" FLUX_USE_FLUX_SMOKE.DATA > useflux_flux_smoke.log 2>&1
 

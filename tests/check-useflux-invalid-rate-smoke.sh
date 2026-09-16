@@ -30,6 +30,10 @@ rm -f "$flux_file" "$deck_file" "$log_file"
 "$mutate_bin" FLUX_DUMP_USEFLUX_FLUX_SMOKE.FLUX "$flux_file" "$mutation"
 cp "$consumer_deck" "$deck_file"
 
+# The canonical consumer deck now uses the USEFLUX basename argument, so retarget
+# the copied deck at the mutated FLUX file for this negative test.
+perl -0pi -e "s/FLUX_DUMP_USEFLUX_FLUX_SMOKE/${case_name}/g" "$deck_file"
+
 if (( np > 1 )); then
     run_cmd=(mpirun -np "$np" "$flow_bin" "$deck_file")
 else
