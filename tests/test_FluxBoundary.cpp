@@ -279,8 +279,12 @@ BOOST_AUTO_TEST_CASE(AppliesTransmissibilityOverridesWithFiltering)
     DummyTransmissibility transmissibility;
     const auto applied = boundary.applyTransmissibilityOverrides(transmissibility);
 
-    BOOST_CHECK_EQUAL(applied, 2U);
-    BOOST_REQUIRE_EQUAL(transmissibility.calls.size(), 2U);
+    // Faces without a direction, and faces whose stored transmissibility is not
+    // a number, carry no information and are left alone. A stored value of zero
+    // or less does carry information -- the parent could not flow through the
+    // face -- so it is applied as zero to keep the face closed.
+    BOOST_CHECK_EQUAL(applied, 4U);
+    BOOST_REQUIRE_EQUAL(transmissibility.calls.size(), 4U);
 
     BOOST_CHECK_EQUAL(std::get<0>(transmissibility.calls[0]), 0U);
     BOOST_CHECK_EQUAL(std::get<1>(transmissibility.calls[0]),
@@ -291,6 +295,17 @@ BOOST_AUTO_TEST_CASE(AppliesTransmissibilityOverridesWithFiltering)
     BOOST_CHECK_EQUAL(std::get<1>(transmissibility.calls[1]),
                       static_cast<unsigned>(Opm::FaceDir::ToIntersectionIndex(Opm::FaceDir::XPlus)));
     BOOST_CHECK_CLOSE(std::get<2>(transmissibility.calls[1]), 7.25, 1e-12);
+
+    // The zero and the negative face are both clamped to zero.
+    BOOST_CHECK_EQUAL(std::get<0>(transmissibility.calls[2]), 3U);
+    BOOST_CHECK_EQUAL(std::get<1>(transmissibility.calls[2]),
+                      static_cast<unsigned>(Opm::FaceDir::ToIntersectionIndex(Opm::FaceDir::YMinus)));
+    BOOST_CHECK_EQUAL(std::get<2>(transmissibility.calls[2]), 0.0);
+
+    BOOST_CHECK_EQUAL(std::get<0>(transmissibility.calls[3]), 4U);
+    BOOST_CHECK_EQUAL(std::get<1>(transmissibility.calls[3]),
+                      static_cast<unsigned>(Opm::FaceDir::ToIntersectionIndex(Opm::FaceDir::YPlus)));
+    BOOST_CHECK_EQUAL(std::get<2>(transmissibility.calls[3]), 0.0);
 }
 
 BOOST_AUTO_TEST_CASE(SelectInputPathPrefersExactFluxFile)

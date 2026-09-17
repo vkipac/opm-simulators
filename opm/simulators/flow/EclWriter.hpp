@@ -685,27 +685,46 @@ public:
             this->fluxMassSnapshots_.assign(this->fluxDumpers_.size(), {});
         }
 
-        // Phase density of a cell, or zero when it is not available.
-        const auto phaseDensity = [&vanguard, this](const int globalCell,
-                                                    const EclIO::FluxFile::Phase phase) -> double
+        // Black-oil state of a cell, used to turn a phase volumetric flux into
+        // component masses. Returns false when the cell is not on this rank.
+        struct CellPvt
         {
+            std::array<double, 3> invB{{0.0, 0.0, 0.0}};  // canonical phase index
+            double rs = 0.0;
+            double rv = 0.0;
+            bool ok = false;
+        };
+
+        const auto cellPvt = [&vanguard, this](const int globalCell) -> CellPvt
+        {
+            CellPvt out{};
+
             const auto cell = vanguard.compressedIndex(globalCell);
             if (cell < 0) {
-                return 0.0;
-            }
-
-            const auto phaseIdx = this->fluxPhaseIndex_(phase);
-            if (!FluidSystem::phaseIsActive(phaseIdx)) {
-                return 0.0;
+                return out;
             }
 
             const auto* intQuants =
                 this->simulator_.model().cachedIntensiveQuantities(cell, /*timeIdx=*/0);
             if (intQuants == nullptr) {
-                return 0.0;
+                return out;
             }
 
-            return getValue(intQuants->fluidState().density(phaseIdx));
+            const auto& fs = intQuants->fluidState();
+            for (unsigned phaseIdx = 0; phaseIdx < FluidSystem::numPhases; ++phaseIdx) {
+                if (FluidSystem::phaseIsActive(phaseIdx)) {
+                    out.invB[phaseIdx] = getValue(fs.invB(phaseIdx));
+                }
+            }
+            if (FluidSystem::enableDissolvedGas()) {
+                out.rs = getValue(fs.Rs());
+            }
+            if (FluidSystem::enableVaporizedOil()) {
+                out.rv = getValue(fs.Rv());
+            }
+
+            out.ok = true;
+            return out;
         };
 
         const auto orientedFaceValue = [this](const auto& accessor,
@@ -753,35 +772,96 @@ public:
                         return orientedFaceValue(floresValue, face, phase);
                     }));
 
-            // Convert to a mass flux here, where the density of the cell the
-            // flow actually comes from is known. A reduced run cannot do this
-            // for inflow, because that upstream cell lies outside its grid.
+            // Convert to COMPONENT mass rates here, where the state of the cell
+            // the flow actually comes from is known. A reduced run cannot do
+            // this for inflow, because that upstream cell lies outside its grid.
+            //
+            // The split matters for live oil and wet gas: the oil phase carries
+            // gas component mass through Rs and the gas phase carries oil
+            // component mass through Rv, so multiplying a phase flux by the
+            // phase density and calling the result "oil" would put a sizeable
+            // part of it into the wrong conservation equation.
+            //
+            // The reference densities are taken from the INTERIOR cell, which
+            // is the one the consumer will use when it converts these masses
+            // back to surface volumes, so the round trip is exact even where
+            // the two sides of the face are in different PVT regions.
             auto massSnapshot = this->fluxDumpers_[i].makeFaceMajorRates(
-                [&orientedFaceValue, &floresValue, &phaseDensity]
-                (const FluxRegions::BoundaryFace& face, const EclIO::FluxFile::Phase phase)
+                [&orientedFaceValue, &floresValue, &cellPvt, &vanguard, this]
+                (const FluxRegions::BoundaryFace& face, const EclIO::FluxFile::Phase component)
                 {
-                    const auto volRate = orientedFaceValue(floresValue, face, phase);
-                    if (volRate == 0.0) {
+                    const auto rateOf = [&](const EclIO::FluxFile::Phase p)
+                    {
+                        return orientedFaceValue(floresValue, face, p);
+                    };
+
+                    // Upwind state for one phase: positive is into the sector,
+                    // so inflow comes from the exterior cell.
+                    const auto upwindOf = [&](const double volRate)
+                    {
+                        return cellPvt((volRate > 0.0) ? face.exteriorGlobalCell
+                                                       : face.interiorGlobalCell);
+                    };
+
+                    const auto interiorCell = vanguard.compressedIndex(face.interiorGlobalCell);
+                    if (interiorCell < 0) {
                         return 0.0;
                     }
+                    const auto pvtRegionIdx =
+                        static_cast<unsigned>(this->simulator_.problem().pvtRegionIndex(interiorCell));
 
-                    // Positive is into the sector, so inflow comes from the
-                    // exterior cell and outflow from the interior one.
-                    const auto upstream = (volRate > 0.0)
-                        ? face.exteriorGlobalCell
-                        : face.interiorGlobalCell;
+                    const bool hasOil = FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx);
+                    const bool hasGas = FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx);
+                    const bool hasWat = FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx);
 
-                    auto rho = phaseDensity(upstream, phase);
-                    if (!(rho > 0.0)) {
-                        // Fall back to the other side rather than dropping the
-                        // flux, e.g. when the upstream cell is inactive.
-                        const auto other = (volRate > 0.0)
-                            ? face.interiorGlobalCell
-                            : face.exteriorGlobalCell;
-                        rho = phaseDensity(other, phase);
+                    const double qo = hasOil ? rateOf(EclIO::FluxFile::Phase::Oil) : 0.0;
+                    const double qg = hasGas ? rateOf(EclIO::FluxFile::Phase::Gas) : 0.0;
+                    const double qw = hasWat ? rateOf(EclIO::FluxFile::Phase::Water) : 0.0;
+
+                    // Surface volume flux of each phase, i.e. reservoir volume
+                    // times the inverse formation volume factor upstream.
+                    double sO = 0.0;
+                    double sG = 0.0;
+                    double sW = 0.0;
+                    double rs = 0.0;
+                    double rv = 0.0;
+
+                    if (hasOil && (qo != 0.0)) {
+                        const auto up = upwindOf(qo);
+                        if (up.ok) {
+                            sO = qo * up.invB[FluidSystem::oilPhaseIdx];
+                            rs = up.rs;
+                        }
+                    }
+                    if (hasGas && (qg != 0.0)) {
+                        const auto up = upwindOf(qg);
+                        if (up.ok) {
+                            sG = qg * up.invB[FluidSystem::gasPhaseIdx];
+                            rv = up.rv;
+                        }
+                    }
+                    if (hasWat && (qw != 0.0)) {
+                        const auto up = upwindOf(qw);
+                        if (up.ok) {
+                            sW = qw * up.invB[FluidSystem::waterPhaseIdx];
+                        }
                     }
 
-                    return (rho > 0.0) ? (volRate * rho) : 0.0;
+                    switch (component) {
+                    case EclIO::FluxFile::Phase::Oil:
+                        return (sO + rv * sG)
+                            * FluidSystem::referenceDensity(FluidSystem::oilPhaseIdx, pvtRegionIdx);
+
+                    case EclIO::FluxFile::Phase::Gas:
+                        return (sG + rs * sO)
+                            * FluidSystem::referenceDensity(FluidSystem::gasPhaseIdx, pvtRegionIdx);
+
+                    case EclIO::FluxFile::Phase::Water:
+                        return sW
+                            * FluidSystem::referenceDensity(FluidSystem::waterPhaseIdx, pvtRegionIdx);
+                    }
+
+                    return 0.0;
                 });
 
             if (std::any_of(massSnapshot.begin(), massSnapshot.end(),
@@ -1224,20 +1304,6 @@ private:
         return FluidSystem::oilCompIdx;
     }
 
-    int fluxPhaseIndex_(const EclIO::FluxFile::Phase phase) const
-    {
-        switch (phase) {
-        case EclIO::FluxFile::Phase::Oil:
-            return FluidSystem::oilPhaseIdx;
-        case EclIO::FluxFile::Phase::Water:
-            return FluidSystem::waterPhaseIdx;
-        case EclIO::FluxFile::Phase::Gas:
-            return FluidSystem::gasPhaseIdx;
-        }
-
-        return FluidSystem::oilPhaseIdx;
-    }
-
     int fluxEquationIndex_(const EclIO::FluxFile::Phase phase) const
     {
         switch (phase) {
@@ -1522,13 +1588,71 @@ private:
         }
     }
 
+    //! \brief Record the exterior cell's relative permeability and capillary
+    //!        pressure for every boundary face of a Pressure-mode record.
+    void collectFluxExteriorRockState_(const FluxDumper& dumper,
+                                       typename FluxDumper::ReportStepData& step) const
+    {
+        const auto& vanguard = this->simulator_.vanguard();
+        const auto& faces = dumper.data().boundaryFaces;
+        const auto numPhaseSlots = static_cast<std::size_t>(dumper.data().header.numPhases);
+
+        step.relPerm.assign(faces.size() * numPhaseSlots, 0.0);
+        step.capPressure.assign(faces.size() * numPhaseSlots, 0.0);
+
+        const auto refPhaseIdx = FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)
+            ? FluidSystem::oilPhaseIdx
+            : (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)
+               ? FluidSystem::gasPhaseIdx
+               : FluidSystem::waterPhaseIdx);
+
+        for (std::size_t f = 0; f < faces.size(); ++f) {
+            const auto cell = vanguard.compressedIndex(faces[f].exteriorGlobalCell);
+            if (cell < 0) {
+                continue;
+            }
+
+            const auto* intQuants =
+                this->simulator_.model().cachedIntensiveQuantities(cell, /*timeIdx=*/0);
+            if (intQuants == nullptr) {
+                continue;
+            }
+
+            const auto& fs = intQuants->fluidState();
+
+            // The capillary pressures are read off the converged phase
+            // pressures rather than from a fresh saturation-function
+            // evaluation, so whatever hysteresis state the exterior cell
+            // carries is already reflected in them.
+            const auto pRef = getValue(fs.pressure(refPhaseIdx));
+
+            std::size_t slot = 0;
+            const auto store = [&](const unsigned phaseIdx)
+            {
+                if (!FluidSystem::phaseIsActive(phaseIdx)) {
+                    return;
+                }
+
+                step.relPerm[f * numPhaseSlots + slot] =
+                    getValue(intQuants->relativePermeability(phaseIdx));
+                step.capPressure[f * numPhaseSlots + slot] =
+                    getValue(fs.pressure(phaseIdx)) - pRef;
+                ++slot;
+            };
+
+            // Same canonical Oil/Water/Gas order as the rate arrays.
+            store(FluidSystem::oilPhaseIdx);
+            store(FluidSystem::waterPhaseIdx);
+            store(FluidSystem::gasPhaseIdx);
+        }
+    }
+
     // The boundary transmissibilities are not available while the writer is
     // being constructed, so record them the first time a report step is dumped.
     // The consumer uses these to reproduce the parent's inter-cell
     // transmissibility instead of the (larger) default outer-boundary value.
     void assignFluxDumperTransmissibilities_()
-    {
-        if (this->fluxTransmissibilitiesAssigned_ || this->fluxDumpers_.empty()) {
+    {        if (this->fluxTransmissibilitiesAssigned_ || this->fluxDumpers_.empty()) {
             return;
         }
 
@@ -1541,6 +1665,7 @@ private:
             const auto& faces = dumper.regionBoundaryFaces();
 
             std::vector<double> trans(faces.size(), 0.0);
+            std::vector<int> pvtRegion(faces.size(), 0);
             for (std::size_t i = 0; i < faces.size(); ++i) {
                 const auto& face = faces[i];
                 const auto interior = vanguard.compressedIndex(face.interiorGlobalCell);
@@ -1555,9 +1680,12 @@ private:
                 // face carries no flow.
                 trans[i] = problem.transmissibilityOrZero(static_cast<unsigned>(interior),
                                                           static_cast<unsigned>(exterior));
+
+                pvtRegion[i] = problem.pvtRegionIndex(static_cast<unsigned>(exterior));
             }
 
             dumper.setBoundaryTransmissibilities(trans);
+            dumper.setBoundaryExteriorPvtRegions(pvtRegion);
         }
     }
 
@@ -1752,6 +1880,13 @@ private:
                     step.rs.push_back(getValue(fs.Rs()));
                     step.rv.push_back(getValue(fs.Rv()));
                 }
+
+                // Saturation-function state of the exterior cell. The consumer
+                // has no cell there, so without these it would have to evaluate
+                // its own rock curves at the exterior saturations, using the
+                // wrong SATNUM region, the wrong scaled end points and none of
+                // this run's hysteresis history.
+                this->collectFluxExteriorRockState_(dumper, step);
             }
 
             dumper.appendReportStep(step);

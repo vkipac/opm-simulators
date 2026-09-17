@@ -50,6 +50,8 @@ public:
         std::vector<double> rv;
         std::vector<double> temperature;
         std::vector<double> massRates;
+        std::vector<double> relPerm;
+        std::vector<double> capPressure;
     };
 
     FluxDumper(std::string parentCaseName,
@@ -96,6 +98,9 @@ public:
     void setBoundaryMinSampleInterval(double interval);
 
     void setBoundaryTransmissibilities(const std::vector<double>& boundaryTransmissibilities);
+
+    //! \brief PVT region of the cell on the far side of each boundary face.
+    void setBoundaryExteriorPvtRegions(const std::vector<int>& exteriorPvtRegions);
 
     const EclIO::FluxFile::Data& data() const;
     const std::vector<FluxRegions::BoundaryFace>& regionBoundaryFaces() const;

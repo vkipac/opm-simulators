@@ -44,6 +44,10 @@ public:
         bool isNnc = false;
         double transmissibility = 0.0;
 
+        //! \brief PVT region of the cell on the far side, as recorded by the
+        //!        producing run.
+        int exteriorPvtRegion = 0;
+
         bool operator==(const Face& other) const = default;
     };
 
@@ -86,14 +90,22 @@ public:
             if (face.interiorActiveCell < 0) {
                 continue;
             }
-            if (!std::isfinite(face.transmissibility) || face.transmissibility <= 0.0) {
+            if (!std::isfinite(face.transmissibility)) {
                 continue;
             }
+
+            // A face the parent could not flow through must not become an open
+            // boundary here. Zero is applied rather than skipped, because
+            // skipping would leave the default outer-boundary value in place
+            // and turn a sealing fault, or a MULTREGT of zero, into a leak.
+            const auto value = (face.transmissibility > 0.0)
+                ? face.transmissibility
+                : decltype(face.transmissibility){0};
 
             const auto boundaryFaceIdx = static_cast<unsigned>(FaceDir::ToIntersectionIndex(face.direction));
             transmissibility.setTransmissibilityBoundary(static_cast<unsigned>(face.interiorActiveCell),
                                                          boundaryFaceIdx,
-                                                         face.transmissibility);
+                                                         value);
             ++appliedCount;
         }
 

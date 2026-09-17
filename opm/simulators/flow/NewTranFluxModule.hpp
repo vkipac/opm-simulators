@@ -571,11 +571,14 @@ public:
                     pressureDifference[phaseIdx]*up.mobility(phaseIdx)*(-transModified/faceArea);
             }
             else {
-                // compute the phase mobility using the material law parameters of the
-                // interior element. TODO: this could probably be done more efficiently
-                const auto& matParams = problem.materialLawParams(globalSpaceIdx);
-                std::array<typename FluidState::ValueType,numPhases> kr;
-                MaterialLaw::relativePermeabilities(kr, matParams, exFluidState);
+                // The stream comes from outside the grid, so its relative
+                // permeability belongs to a cell this run does not have. The
+                // problem supplies it when it knows better -- a sector run
+                // reads it from the .FLUX file -- and otherwise falls back to
+                // evaluating this cell's saturation functions at the exterior
+                // saturations.
+                std::array<typename FluidState::ValueType, numPhases> kr;
+                problem.boundaryRelativePermeabilities(kr, globalSpaceIdx, bfIdx, exFluidState);
 
                 const auto& mob = kr[phaseIdx]/exFluidState.viscosity(phaseIdx);
                 volumeFlux[phaseIdx] =

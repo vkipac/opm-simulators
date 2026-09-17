@@ -645,6 +645,57 @@ public:
         return transmissibilities_.transmissibilityBoundary(globalSpaceIdx, boundaryFaceIdx);
     }
 
+    /*!
+     * \brief Relative permeabilities of the fluid entering through a boundary
+     *        face.
+     *
+     * \details A USEFLUX run takes them from the .FLUX file, where the
+     *   producing run recorded the exterior cell's values, so that the
+     *   saturation-function region, the scaled end points and the hysteresis
+     *   state of the cell the flow comes from are all honoured. Everything else
+     *   falls back to evaluating this cell's saturation functions at the
+     *   exterior saturations, which is what the code did unconditionally
+     *   before.
+     */
+    template <class FluidState, class Container>
+    void boundaryRelativePermeabilities(Container& kr,
+                                        const unsigned globalSpaceIdx,
+                                        const unsigned boundaryFaceIdx,
+                                        const FluidState& exFluidState) const
+    {
+        const auto dir = FaceDir::FromIntersectionIndex(static_cast<int>(boundaryFaceIdx));
+        const auto* fluxData = this->fluxBoundaryData_();
+        const auto* fluxStep = this->fluxBoundaryReportStep_();
+        const auto fluxSlot = this->fluxBoundaryFaceSlot_(globalSpaceIdx, dir);
+
+        if (fluxData != nullptr && fluxStep != nullptr && fluxSlot > 0) {
+            const auto numPhaseSlots = static_cast<std::size_t>(fluxData->header.numPhases);
+            const auto base = static_cast<std::size_t>(fluxSlot - 1) * numPhaseSlots;
+
+            if (fluxStep->relPerm.size() >= base + numPhaseSlots) {
+                for (unsigned phaseIdx = 0; phaseIdx < FluidSystem::numPhases; ++phaseIdx) {
+                    kr[phaseIdx] = 0.0;
+                }
+
+                std::size_t slot = 0;
+                const auto load = [&](const unsigned phaseIdx)
+                {
+                    if (FluidSystem::phaseIsActive(phaseIdx)) {
+                        kr[phaseIdx] = fluxStep->relPerm[base + slot];
+                        ++slot;
+                    }
+                };
+
+                load(oilPhaseIdx);
+                load(waterPhaseIdx);
+                load(gasPhaseIdx);
+                return;
+            }
+        }
+
+        MaterialLaw::relativePermeabilities(kr, this->materialLawParams(globalSpaceIdx), exFluidState);
+    }
+
 
     /*!
      * \copydoc EclTransmissiblity::thermalHalfTransmissibility

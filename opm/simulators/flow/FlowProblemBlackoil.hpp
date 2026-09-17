@@ -1099,7 +1099,15 @@ public:
             const auto fluxFaceIndex = static_cast<std::size_t>(fluxSlot - 1);
             if (fluxSlot > 0 && fluxFaceIndex < fluxStep->pressures.size()) {
                 InitialFluidState fluidState;
-                const int pvtRegionIdx = this->pvtRegionIndex(globalDofIdx);
+
+                // The stream on the far side belongs to the parent's cell, not
+                // to this one, so its PVT region is the one the producing run
+                // recorded. Falling back to the interior region would evaluate
+                // the density, formation volume factor and viscosity of the
+                // inflow against the wrong tables.
+                const int pvtRegionIdx = (fluxFace->exteriorPvtRegion >= 0)
+                    ? fluxFace->exteriorPvtRegion
+                    : this->pvtRegionIndex(globalDofIdx);
                 fluidState.setPvtRegionIndex(pvtRegionIdx);
 
                 const auto& initialState = initialFluidStates_[globalDofIdx];
@@ -1133,9 +1141,34 @@ public:
                 fluidState.setTotalSaturation(1.0);
 
                 const double pressure = fluxStep->pressures[fluxFaceIndex];
+
+                // Capillary pressure of the exterior cell, relative to the
+                // reference phase. The producing run recorded it because
+                // recomputing it here would use this cell's saturation-function
+                // region, scaled end points and hysteresis state, none of which
+                // describe the cell the pressure came from.
                 std::array<Scalar, numPhases> pc = {0};
-                const auto& matParams = this->materialLawParams(globalDofIdx);
-                MaterialLaw::capillaryPressures(pc, matParams, fluidState);
+                const auto numPhaseSlots =
+                    static_cast<std::size_t>(fluxData->header.numPhases);
+                const auto pcBase = fluxFaceIndex * numPhaseSlots;
+                if (fluxStep->capPressure.size() >= pcBase + numPhaseSlots) {
+                    std::size_t slot = 0;
+                    const auto load = [&](const unsigned phaseIdx)
+                    {
+                        if (FluidSystem::phaseIsActive(phaseIdx)) {
+                            pc[phaseIdx] = fluxStep->capPressure[pcBase + slot];
+                            ++slot;
+                        }
+                    };
+                    load(oilPhaseIdx);
+                    load(waterPhaseIdx);
+                    load(gasPhaseIdx);
+                }
+                else {
+                    const auto& matParams = this->materialLawParams(globalDofIdx);
+                    MaterialLaw::capillaryPressures(pc, matParams, fluidState);
+                }
+
                 Valgrind::CheckDefined(pressure);
                 Valgrind::CheckDefined(pc);
                 for (unsigned activePhaseIdx = 0; activePhaseIdx < FluidSystem::numActivePhases(); ++activePhaseIdx) {

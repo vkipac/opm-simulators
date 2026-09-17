@@ -110,6 +110,18 @@ const std::vector<FluxRegions::BoundaryFace>& FluxDumper::regionBoundaryFaces() 
     return this->regionBoundaryFaces_;
 }
 
+void FluxDumper::setBoundaryExteriorPvtRegions(const std::vector<int>& exteriorPvtRegions)
+{
+    if (exteriorPvtRegions.size() != this->data_.boundaryFaces.size()) {
+        OPM_THROW(std::invalid_argument,
+                  "FluxDumper: exterior PVT region vector must match boundary face count");
+    }
+
+    for (std::size_t i = 0; i < this->data_.boundaryFaces.size(); ++i) {
+        this->data_.boundaryFaces[i].exteriorPvtRegion = exteriorPvtRegions[i];
+    }
+}
+
 std::vector<double> FluxDumper::aggregateRates(
     const Sampling sampling,
     const std::vector<std::vector<double>>& rateSnapshots,
@@ -231,25 +243,42 @@ void FluxDumper::appendReportStep(const ReportStepData& stepData)
     step.rv = stepData.rv;
     step.temperature = stepData.temperature;
     step.massRates = stepData.massRates;
+    step.relPerm = stepData.relPerm;
+    step.capPressure = stepData.capPressure;
 
-    // Mass rates are stored as one flat array, so they have to be present on
-    // every record or on none. The first record is emitted before any flux has
-    // been sampled, so back-fill it rather than dropping the whole series.
-    const auto anyMassRates = !step.massRates.empty()
-        || std::any_of(this->data_.reportSteps.begin(), this->data_.reportSteps.end(),
-                       [](const auto& existing) { return !existing.massRates.empty(); });
+    // Each of these is stored as one flat array, so a quantity has to be
+    // present on every record or on none. The first record is emitted before
+    // anything has been sampled, so back-fill it rather than dropping the whole
+    // series.
+    const auto faceMajorWidth = static_cast<std::size_t>(this->data_.header.numBoundaryFaces)
+                              * static_cast<std::size_t>(this->data_.header.numPhases);
 
-    if (anyMassRates) {
-        if (step.massRates.empty()) {
-            step.massRates.assign(step.rates.size(), 0.0);
+    const auto backFill = [this, faceMajorWidth]
+        (std::vector<double> EclIO::FluxFile::ReportStep::* member,
+         std::vector<double>& incoming)
+    {
+        const auto anyPresent = !incoming.empty()
+            || std::any_of(this->data_.reportSteps.begin(), this->data_.reportSteps.end(),
+                           [member](const auto& existing) { return !(existing.*member).empty(); });
+
+        if (!anyPresent) {
+            return;
+        }
+
+        if (incoming.empty()) {
+            incoming.assign(faceMajorWidth, 0.0);
         }
 
         for (auto& existing : this->data_.reportSteps) {
-            if (existing.massRates.empty()) {
-                existing.massRates.assign(existing.rates.size(), 0.0);
+            if ((existing.*member).empty()) {
+                (existing.*member).assign(faceMajorWidth, 0.0);
             }
         }
-    }
+    };
+
+    backFill(&EclIO::FluxFile::ReportStep::massRates, step.massRates);
+    backFill(&EclIO::FluxFile::ReportStep::relPerm, step.relPerm);
+    backFill(&EclIO::FluxFile::ReportStep::capPressure, step.capPressure);
 
     if (!step.temperature.empty()) {
         this->data_.header.hasTemperature = true;

@@ -81,6 +81,7 @@ FluxBoundary FluxBoundary::fromData(const EclIO::FluxFile::Data& data,
             static_cast<FaceDir::DirEnum>(face.direction),
             face.direction == static_cast<int>(FaceDir::Unknown),
             face.transmissibility,
+            face.exteriorPvtRegion,
         });
     }
 
