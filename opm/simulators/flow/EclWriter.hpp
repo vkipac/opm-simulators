@@ -192,6 +192,15 @@ public:
              "time step. This restores the behaviour of earlier versions and is "
              "generally less accurate for models whose boundary flow varies "
              "within a report step.");
+        Parameters::Register<Parameters::FluxBoundaryPressureFeedback<Scalar>>
+            ("Gain on the USEFLUX FLUX-mode boundary pressure feedback. A "
+             "prescribed rate fixes the mass crossing the boundary but lets the "
+             "pressure drift, because nothing couples the two. A non-zero gain "
+             "corrects the rate towards the parent using the conductance the "
+             "producing run recorded. One applies the full face conductance, "
+             "which over-corrects because in the parent the exterior pressure "
+             "moves with the interior; small values are the useful range. Zero "
+             "disables the correction.");
     }
 
     // The Simulator object should preferably have been const - the
@@ -685,11 +694,20 @@ public:
             this->fluxMassSnapshots_.assign(this->fluxDumpers_.size(), {});
         }
 
+        if (this->fluxCondSnapshots_.size() != this->fluxDumpers_.size()) {
+            this->fluxCondSnapshots_.assign(this->fluxDumpers_.size(), {});
+        }
+
+        if (this->fluxPintSnapshots_.size() != this->fluxDumpers_.size()) {
+            this->fluxPintSnapshots_.assign(this->fluxDumpers_.size(), {});
+        }
+
         // Black-oil state of a cell, used to turn a phase volumetric flux into
         // component masses. Returns false when the cell is not on this rank.
         struct CellPvt
         {
             std::array<double, 3> invB{{0.0, 0.0, 0.0}};  // canonical phase index
+            std::array<double, 3> mobility{{0.0, 0.0, 0.0}};
             double rs = 0.0;
             double rv = 0.0;
             bool ok = false;
@@ -714,6 +732,7 @@ public:
             for (unsigned phaseIdx = 0; phaseIdx < FluidSystem::numPhases; ++phaseIdx) {
                 if (FluidSystem::phaseIsActive(phaseIdx)) {
                     out.invB[phaseIdx] = getValue(fs.invB(phaseIdx));
+                    out.mobility[phaseIdx] = getValue(intQuants->mobility(phaseIdx));
                 }
             }
             if (FluidSystem::enableDissolvedGas()) {
@@ -871,9 +890,121 @@ public:
             }
 
             this->fluxMassSnapshots_[i].push_back(std::move(massSnapshot));
+
+            // Conductance of each face, carried through the same component
+            // split. A consumer uses it to correct the prescribed rate for its
+            // own pressure drift, which a bare rate cannot do.
+            auto condSnapshot = this->fluxDumpers_[i].makeFaceMajorRates(
+                [&orientedFaceValue, &floresValue, &cellPvt, &vanguard, this]
+                (const FluxRegions::BoundaryFace& face, const EclIO::FluxFile::Phase component)
+                {
+                    const auto interiorCell = vanguard.compressedIndex(face.interiorGlobalCell);
+                    const auto exteriorCell = vanguard.compressedIndex(face.exteriorGlobalCell);
+                    if (interiorCell < 0 || exteriorCell < 0) {
+                        return 0.0;
+                    }
+
+                    const auto trans =
+                        this->simulator_.problem().transmissibilityOrZero(static_cast<unsigned>(interiorCell),
+                                                                          static_cast<unsigned>(exteriorCell));
+                    if (!(trans > 0.0)) {
+                        return 0.0;
+                    }
+
+                    const auto pvtRegionIdx =
+                        static_cast<unsigned>(this->simulator_.problem().pvtRegionIndex(interiorCell));
+
+                    const auto upwindOf = [&](const EclIO::FluxFile::Phase p)
+                    {
+                        const auto q = orientedFaceValue(floresValue, face, p);
+                        return cellPvt((q > 0.0) ? face.exteriorGlobalCell : face.interiorGlobalCell);
+                    };
+
+                    const bool hasOil = FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx);
+                    const bool hasGas = FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx);
+                    const bool hasWat = FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx);
+
+                    // Surface volume conductance of each phase: mobility times
+                    // transmissibility times the inverse formation volume
+                    // factor, all taken upstream.
+                    double cO = 0.0;
+                    double cG = 0.0;
+                    double cW = 0.0;
+                    double rs = 0.0;
+                    double rv = 0.0;
+
+                    if (hasOil) {
+                        const auto up = upwindOf(EclIO::FluxFile::Phase::Oil);
+                        if (up.ok) {
+                            cO = trans * up.mobility[FluidSystem::oilPhaseIdx]
+                               * up.invB[FluidSystem::oilPhaseIdx];
+                            rs = up.rs;
+                        }
+                    }
+                    if (hasGas) {
+                        const auto up = upwindOf(EclIO::FluxFile::Phase::Gas);
+                        if (up.ok) {
+                            cG = trans * up.mobility[FluidSystem::gasPhaseIdx]
+                               * up.invB[FluidSystem::gasPhaseIdx];
+                            rv = up.rv;
+                        }
+                    }
+                    if (hasWat) {
+                        const auto up = upwindOf(EclIO::FluxFile::Phase::Water);
+                        if (up.ok) {
+                            cW = trans * up.mobility[FluidSystem::waterPhaseIdx]
+                               * up.invB[FluidSystem::waterPhaseIdx];
+                        }
+                    }
+
+                    switch (component) {
+                    case EclIO::FluxFile::Phase::Oil:
+                        return (cO + rv * cG)
+                            * FluidSystem::referenceDensity(FluidSystem::oilPhaseIdx, pvtRegionIdx);
+
+                    case EclIO::FluxFile::Phase::Gas:
+                        return (cG + rs * cO)
+                            * FluidSystem::referenceDensity(FluidSystem::gasPhaseIdx, pvtRegionIdx);
+
+                    case EclIO::FluxFile::Phase::Water:
+                        return cW
+                            * FluidSystem::referenceDensity(FluidSystem::waterPhaseIdx, pvtRegionIdx);
+                    }
+
+                    return 0.0;
+                });
+
+            this->fluxCondSnapshots_[i].push_back(std::move(condSnapshot));
+
+            // Reference-phase pressure of the interior cell, one per face.
+            const auto& faces = this->fluxDumpers_[i].data().boundaryFaces;
+            std::vector<double> pint(faces.size(), 0.0);
+            for (std::size_t f = 0; f < faces.size(); ++f) {
+                const auto cell = vanguard.compressedIndex(
+                    this->fluxDumpers_[i].regionBoundaryFaces()[f].interiorGlobalCell);
+                if (cell < 0) {
+                    continue;
+                }
+
+                const auto* iq = this->simulator_.model().cachedIntensiveQuantities(cell, /*timeIdx=*/0);
+                if (iq != nullptr) {
+                    pint[f] = getValue(iq->fluidState().pressure(fluxReferencePhaseIdx_()));
+                }
+            }
+            this->fluxPintSnapshots_[i].push_back(std::move(pint));
         }
 
         this->fluxRateTimeWeights_.push_back(static_cast<double>(dt));
+    }
+
+    //! \brief Phase whose pressure is used as the reference in the FLUX file.
+    static constexpr unsigned fluxReferencePhaseIdx_()
+    {
+        return FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)
+            ? FluidSystem::oilPhaseIdx
+            : (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)
+               ? FluidSystem::gasPhaseIdx
+               : FluidSystem::waterPhaseIdx);
     }
 
     void beginRestart()
@@ -1789,6 +1920,28 @@ private:
                         FluxDumper::aggregateRates(EclIO::FluxFile::Sampling::Averaged,
                                                    this->fluxMassSnapshots_[dumperIdx],
                                                    this->fluxRateTimeWeights_);
+
+                    // The correction pair is averaged the same way, so it
+                    // describes the same window as the rate it corrects.
+                    if ((dumperIdx < this->fluxCondSnapshots_.size())
+                        && (this->fluxCondSnapshots_[dumperIdx].size()
+                            == this->fluxRateTimeWeights_.size()))
+                    {
+                        step.massRateDerivative =
+                            FluxDumper::aggregateRates(EclIO::FluxFile::Sampling::Averaged,
+                                                       this->fluxCondSnapshots_[dumperIdx],
+                                                       this->fluxRateTimeWeights_);
+                    }
+
+                    if ((dumperIdx < this->fluxPintSnapshots_.size())
+                        && (this->fluxPintSnapshots_[dumperIdx].size()
+                            == this->fluxRateTimeWeights_.size()))
+                    {
+                        step.interiorPressure =
+                            FluxDumper::aggregateRates(EclIO::FluxFile::Sampling::Averaged,
+                                                       this->fluxPintSnapshots_[dumperIdx],
+                                                       this->fluxRateTimeWeights_);
+                    }
                 }
             }
             else if (haveCapturedRates) {
@@ -1897,6 +2050,12 @@ private:
             snapshots.clear();
         }
         for (auto& snapshots : this->fluxMassSnapshots_) {
+            snapshots.clear();
+        }
+        for (auto& snapshots : this->fluxCondSnapshots_) {
+            snapshots.clear();
+        }
+        for (auto& snapshots : this->fluxPintSnapshots_) {
             snapshots.clear();
         }
         this->fluxRateTimeWeights_.clear();
@@ -2152,6 +2311,11 @@ private:
     std::vector<std::vector<double>> fluxCapturedFaceRates_;
     std::vector<std::vector<std::vector<double>>> fluxRateSnapshots_;
     std::vector<std::vector<std::vector<double>>> fluxMassSnapshots_;
+
+    //! \brief Per-face boundary conductance and interior pressure, sampled
+    //!        alongside the rates so a consumer can correct its own drift.
+    std::vector<std::vector<std::vector<double>>> fluxCondSnapshots_;
+    std::vector<std::vector<std::vector<double>>> fluxPintSnapshots_;
     std::vector<double> fluxRateTimeWeights_;
     std::vector<std::string> fluxSummaryKeyList_;
     std::vector<SummaryConfigNode::Type> fluxSummaryKeyTypes_;

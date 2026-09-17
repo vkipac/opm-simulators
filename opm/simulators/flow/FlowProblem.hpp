@@ -1465,27 +1465,66 @@ protected:
 
         const auto areaScale = Scalar{-1} / faceArea;
 
+        // A prescribed rate fixes the mass crossing the boundary but leaves the
+        // pressure free: nothing couples the two, so any drift the sector picks
+        // up from elsewhere simply integrates. The producing run records the
+        // conductance it saw and its own interior pressure, which turns the
+        // rate into a linearisation of the parent's boundary flux about the
+        // parent's state:
+        //
+        //     m = m_parent + (dm/dp) * (p_parent - p_sector)
+        //
+        // The exterior pressure cancels because both runs share the interior
+        // cell. The correction is exactly zero when the sector reproduces the
+        // parent, so it cannot bias a run that is already right.
+        Scalar restore = 0.0;
+        const bool hasRestore = isMassRate
+            && (this->fluxBoundaryPressureFeedback_ > Scalar{0})
+            && (fluxStep->massRateDerivative.size() == expectedSize)
+            && (fluxStep->interiorPressure.size() == faceCount);
+
+        if (hasRestore) {
+            const auto* intQuants =
+                this->simulator().model().cachedIntensiveQuantities(globalSpaceIdx, /*timeIdx=*/0);
+            if (intQuants != nullptr) {
+                const auto refPhaseIdx = FluidSystem::phaseIsActive(oilPhaseIdx)
+                    ? oilPhaseIdx
+                    : (FluidSystem::phaseIsActive(gasPhaseIdx) ? gasPhaseIdx : waterPhaseIdx);
+
+                restore = this->fluxBoundaryPressureFeedback_
+                    * (fluxStep->interiorPressure[faceIndex]
+                       - getValue(intQuants->fluidState().pressure(refPhaseIdx)));
+            }
+        }
+
+        const auto& derivative = fluxStep->massRateDerivative;
+        const auto corrected = [&](const std::size_t idx)
+        {
+            return hasRestore
+                ? (storedRates[idx] + derivative[idx] * restore)
+                : storedRates[idx];
+        };
+
         if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Oil)) {
             if (FluidSystem::phaseIsActive(oilPhaseIdx)) {
                 phaseVolRate[FluidSystem::canonicalToActiveCompIdx(oilCompIdx)] =
-                    storedRates[base + phaseSlot] * areaScale;
+                    corrected(base + phaseSlot) * areaScale;
             }
             ++phaseSlot;
         }
         if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Water)) {
             if (FluidSystem::phaseIsActive(waterPhaseIdx)) {
                 phaseVolRate[FluidSystem::canonicalToActiveCompIdx(waterCompIdx)] =
-                    storedRates[base + phaseSlot] * areaScale;
+                    corrected(base + phaseSlot) * areaScale;
             }
             ++phaseSlot;
         }
         if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Gas)) {
             if (FluidSystem::phaseIsActive(gasPhaseIdx)) {
                 phaseVolRate[FluidSystem::canonicalToActiveCompIdx(gasCompIdx)] =
-                    storedRates[base + phaseSlot] * areaScale;
+                    corrected(base + phaseSlot) * areaScale;
             }
         }
-
 
         return true;
     }
@@ -2058,6 +2097,9 @@ protected:
         this->applyFluxBoundaryTransmissibilityOverrides_();
         this->reportUnmappedFluxBoundaryFaces_();
 
+        this->fluxBoundaryPressureFeedback_ =
+            Parameters::Get<Parameters::FluxBoundaryPressureFeedback<Scalar>>();
+
         OpmLog::info(fmt::format("USEFLUX: {} boundary record(s) read from '{}' ({})",
                                  fluxData.reportSteps.size(),
                                  selectedFluxPath.string(),
@@ -2406,6 +2448,9 @@ protected:
     BCData<int> bcindex_;
     BCData<int> fluxBoundaryFaceIndex_;
     BCData<Scalar> fluxBoundaryFaceArea_;
+
+    //! \brief Gain on the FLUX-mode boundary pressure feedback, zero to disable.
+    Scalar fluxBoundaryPressureFeedback_ = 0.0;
     std::shared_ptr<FluxBoundary> fluxBoundary_;
     std::shared_ptr<ParentSummary> fluxParentSummaryData_;
     const EclIO::FluxFile::ReportStep* fluxBoundaryActiveRecord_ = nullptr;

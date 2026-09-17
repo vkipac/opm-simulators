@@ -88,6 +88,15 @@ struct FluxBoundaryMinIntervalBetweenSamples { static constexpr Scalar value = 1
 // models whose boundary flow varies within a report step.
 struct FluxBoundaryReportStepsOnly { static constexpr bool value = false; };
 
+//! \brief Gain on the FLUX-mode boundary pressure feedback.
+//!
+//! \details Zero imposes the parent's rate exactly, which fixes the mass but
+//!   lets the pressure drift. One applies the full face conductance, which
+//!   over-corrects because in the parent the exterior pressure moves with the
+//!   interior rather than staying put.
+template<class Scalar>
+struct FluxBoundaryPressureFeedback { static constexpr Scalar value = 0.0; };
+
 } // namespace Opm::Parameters
 
 namespace Opm {

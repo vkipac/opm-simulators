@@ -245,6 +245,10 @@ void FluxDumper::appendReportStep(const ReportStepData& stepData)
     step.massRates = stepData.massRates;
     step.relPerm = stepData.relPerm;
     step.capPressure = stepData.capPressure;
+    step.interiorPressure = stepData.interiorPressure;
+    step.massRateDerivative = stepData.massRateDerivative;
+    step.relPerm = stepData.relPerm;
+    step.capPressure = stepData.capPressure;
 
     // Each of these is stored as one flat array, so a quantity has to be
     // present on every record or on none. The first record is emitted before
@@ -279,6 +283,26 @@ void FluxDumper::appendReportStep(const ReportStepData& stepData)
     backFill(&EclIO::FluxFile::ReportStep::massRates, step.massRates);
     backFill(&EclIO::FluxFile::ReportStep::relPerm, step.relPerm);
     backFill(&EclIO::FluxFile::ReportStep::capPressure, step.capPressure);
+    backFill(&EclIO::FluxFile::ReportStep::massRateDerivative, step.massRateDerivative);
+
+    // One value per face rather than per face and phase.
+    {
+        const auto faceWidth = static_cast<std::size_t>(this->data_.header.numBoundaryFaces);
+        const auto anyPresent = !step.interiorPressure.empty()
+            || std::any_of(this->data_.reportSteps.begin(), this->data_.reportSteps.end(),
+                           [](const auto& existing) { return !existing.interiorPressure.empty(); });
+
+        if (anyPresent) {
+            if (step.interiorPressure.empty()) {
+                step.interiorPressure.assign(faceWidth, 0.0);
+            }
+            for (auto& existing : this->data_.reportSteps) {
+                if (existing.interiorPressure.empty()) {
+                    existing.interiorPressure.assign(faceWidth, 0.0);
+                }
+            }
+        }
+    }
 
     if (!step.temperature.empty()) {
         this->data_.header.hasTemperature = true;
