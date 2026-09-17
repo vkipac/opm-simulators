@@ -57,4 +57,17 @@ bool applyUseFluxActnum(EclipseState& eclipseState)
     return true;
 }
 
+bool isFluxDumpRun(const EclipseState& eclipseState,
+                   const Parallel::Communication& comm)
+{
+    int isDump = 0;
+    if (comm.rank() == 0) {
+        isDump = (!eclipseState.getIOConfig().getUseFlux()
+                  && eclipseState.globalFieldProps().has_int("FLUXNUM"))
+            ? 1 : 0;
+    }
+
+    return comm.max(isDump) != 0;
+}
+
 } // namespace Opm

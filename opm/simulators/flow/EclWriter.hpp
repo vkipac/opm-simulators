@@ -1619,8 +1619,9 @@ private:
                 this->fluxMissingFloresReported_ = true;
                 OpmLog::warning("DUMPFLUX is writing FLUX-mode boundary rates, but no FLORES "
                                 "data is available. All boundary rates will be zero and a "
-                                "USEFLUX run will behave as a closed region. Add 'FLOWS' and "
-                                "'FLORES' to RPTRST in the DUMPFLUX deck.");
+                                "USEFLUX run will behave as a closed region. A DUMPFLUX run "
+                                "normally turns the FLORES computation on by itself, so this "
+                                "means the run was not recognised as a producer.");
             }
         }
 

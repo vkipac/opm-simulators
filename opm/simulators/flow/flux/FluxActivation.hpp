@@ -20,11 +20,22 @@
 #ifndef OPM_FLUX_ACTIVATION_HPP
 #define OPM_FLUX_ACTIVATION_HPP
 
+#include <opm/simulators/utils/ParallelCommunication.hpp>
+
 namespace Opm {
 
 class EclipseState;
 
 bool applyUseFluxActnum(EclipseState& eclipseState);
+
+//! \brief Whether this run writes a .FLUX file, i.e. it has FLUXNUM but is not
+//!   itself a USEFLUX consumer.
+//!
+//! \details Only the root rank keeps the global field properties once the grid
+//!   has been distributed, so the answer is broadcast to keep every rank in
+//!   agreement.
+bool isFluxDumpRun(const EclipseState& eclipseState,
+                   const Parallel::Communication& comm);
 
 } // namespace Opm
 

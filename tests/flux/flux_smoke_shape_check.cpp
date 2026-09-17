@@ -19,6 +19,7 @@
 #include <opm/io/eclipse/FluxFile.hpp>
 #include <opm/io/eclipse/EclFile.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cctype>
 #include <cstdlib>
@@ -206,6 +207,25 @@ int main(int argc, char** argv)
             }
             if (step.rv.size() != expectedFaceSize) {
                 return fail("unexpected FLXRV payload size in " + path);
+            }
+        }
+
+        if (expectFlux) {
+            // A producer that fails to turn the FLORES computation on writes a
+            // structurally valid file whose rates are all zero, which makes a
+            // USEFLUX run behave as a closed region. Guard against that here
+            // rather than leaving it to the equivalence tests.
+            const auto anyRate =
+                std::any_of(data.reportSteps.begin(), data.reportSteps.end(),
+                            [](const auto& step)
+                            {
+                                return std::any_of(step.rates.begin(), step.rates.end(),
+                                                   [](const double rate)
+                                                   { return rate != 0.0; });
+                            });
+
+            if (!anyRate) {
+                return fail("all boundary rates are zero in " + path);
             }
         }
     }

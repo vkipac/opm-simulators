@@ -87,7 +87,8 @@ template<class FluidSystem>
 FlowsContainer<FluidSystem>::
 FlowsContainer(const Schedule& schedule,
                const SummaryConfig& summaryConfig,
-               std::function<bool(const int)> isInterior)
+               std::function<bool(const int)> isInterior,
+               const bool forceFlores)
 {
     using namespace std::string_literals;
     using Dir = FaceDir::DirEnum;
@@ -108,7 +109,8 @@ FlowsContainer(const Schedule& schedule,
     enableFlows_ = false;
     enableFlowsn_ = false;
 
-    anyFlores_ = std::ranges::any_of(schedule,
+    anyFlores_ = forceFlores ||
+                 std::ranges::any_of(schedule,
                                      [](const auto& block)
                                      {
                                          const auto& rstkw = block.rst_config().keywords;

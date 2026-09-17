@@ -56,6 +56,8 @@
 
 #include <opm/output/eclipse/RegionVariableCollection.hpp>
 
+#include <opm/simulators/flow/flux/FluxActivation.hpp>
+
 #include <opm/simulators/utils/ParallelCommunication.hpp>
 #include <opm/simulators/utils/ParallelRegionVariableValues.hpp>
 #include <opm/simulators/utils/ParallelRegionsetVariableDescriptor.hpp>
@@ -168,7 +170,7 @@ GenericOutputModule(const EclipseState& eclState,
     , enableGeochemistry_(enableGeochemistry)
     , regionVars_ { std::make_unique<ParallelRegionsetVariableDescriptor>(comm),
                     std::make_unique<ParallelRegionVariableValues>(comm) }
-    , flowsC_(schedule, summaryConfig, isInterior)
+    , flowsC_(schedule, summaryConfig, isInterior, isFluxDumpRun(eclState, comm))
     , rftC_(eclState_, schedule_,
             [this](const std::string& wname) { return this->isOwnedByCurrentRank(wname); },
             [this](const std::string& wname) { return this->isOnCurrentRank(wname); })
