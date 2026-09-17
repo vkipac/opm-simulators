@@ -245,6 +245,7 @@ void FluxDumper::appendReportStep(const ReportStepData& stepData)
     step.massRates = stepData.massRates;
     step.relPerm = stepData.relPerm;
     step.capPressure = stepData.capPressure;
+    step.externalRegionSums = stepData.externalRegionSums;
 
     // Each of these is stored as one flat array, so a quantity has to be
     // present on every record or on none. The first record is emitted before

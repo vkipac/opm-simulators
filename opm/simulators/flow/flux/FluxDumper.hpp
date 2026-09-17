@@ -52,6 +52,7 @@ public:
         std::vector<double> massRates;
         std::vector<double> relPerm;
         std::vector<double> capPressure;
+        std::vector<double> externalRegionSums;
     };
 
     FluxDumper(std::string parentCaseName,

@@ -646,6 +646,30 @@ public:
     }
 
     /*!
+     * \brief Pore-volume weighted sums for the cells a USEFLUX run does not
+     *        have, as recorded by the run that produced its boundary data.
+     *
+     * \details Returns false when there are none, which is every run that is
+     *   not reading a .FLUX file. See FluxFile::ReportStep::externalRegionSums
+     *   for the layout.
+     */
+    bool fluxConverterExternalSums(std::array<Scalar, 8>& hydrocarbonPvWeighted,
+                                   std::array<Scalar, 8>& poreVolumeWeighted) const
+    {
+        const auto* fluxStep = this->fluxBoundaryReportStep_();
+        if (fluxStep == nullptr || fluxStep->externalRegionSums.size() != 16) {
+            return false;
+        }
+
+        for (std::size_t i = 0; i < 8; ++i) {
+            hydrocarbonPvWeighted[i] = static_cast<Scalar>(fluxStep->externalRegionSums[i]);
+            poreVolumeWeighted[i] = static_cast<Scalar>(fluxStep->externalRegionSums[i + 8]);
+        }
+
+        return true;
+    }
+
+    /*!
      * \brief Relative permeabilities of the fluid entering through a boundary
      *        face.
      *

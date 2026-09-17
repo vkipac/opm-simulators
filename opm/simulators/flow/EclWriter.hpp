@@ -1647,6 +1647,89 @@ private:
         }
     }
 
+    //! \brief Pore-volume weighted sums over the cells OUTSIDE a dumper's
+    //!        region, in the layout RateConverter accumulates internally.
+    //!
+    //! \details A reduced run adds these to its own sums so that the averages
+    //!   driving a reservoir-volume target are taken over the whole of the
+    //!   original model. Sums rather than averages, so that the reduced run
+    //!   still reflects changes made inside its own region.
+    void collectFluxConverterExternal_(const FluxDumper& dumper,
+                                       typename FluxDumper::ReportStepData& step) const
+    {
+        const auto& vanguard = this->simulator_.vanguard();
+        const auto& model = this->simulator_.model();
+
+        std::vector<char> inRegion(model.numGridDof(), 0);
+        for (const auto globalCell : dumper.data().localToGlobal) {
+            const auto cell = vanguard.compressedIndex(globalCell);
+            if (cell >= 0 && static_cast<std::size_t>(cell) < inRegion.size()) {
+                inRegion[cell] = 1;
+            }
+        }
+
+        std::array<double, 8> hpv{};
+        std::array<double, 8> pv{};
+
+        const auto pressurePhaseIdx = FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)
+            ? FluidSystem::oilPhaseIdx
+            : (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)
+               ? FluidSystem::gasPhaseIdx
+               : FluidSystem::waterPhaseIdx);
+
+        for (std::size_t cell = 0; cell < inRegion.size(); ++cell) {
+            if (inRegion[cell] != 0) {
+                continue;
+            }
+
+            const auto* intQuants = model.cachedIntensiveQuantities(static_cast<unsigned>(cell), 0);
+            if (intQuants == nullptr) {
+                continue;
+            }
+
+            const auto& fs = intQuants->fluidState();
+            const double cellPv = model.dofTotalVolume(cell) * getValue(intQuants->porosity());
+            if (!(cellPv > 0.0)) {
+                continue;
+            }
+
+            double hydrocarbon = 1.0;
+            if (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)) {
+                hydrocarbon -= getValue(fs.saturation(FluidSystem::waterPhaseIdx));
+            }
+
+            const auto accumulate = [&](std::array<double, 8>& out, const double weight)
+            {
+                if (!(weight > 0.0)) {
+                    return;
+                }
+
+                out[0] += getValue(fs.pressure(pressurePhaseIdx)) * weight;
+                out[1] += getValue(fs.temperature(pressurePhaseIdx)) * weight;
+                if (FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)
+                    && FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx))
+                {
+                    out[2] += getValue(fs.Rs()) * weight;
+                    out[3] += getValue(fs.Rv()) * weight;
+                }
+                if (FluidSystem::enableDissolvedGasInWater()) {
+                    out[4] += getValue(fs.Rsw()) * weight;
+                }
+                if (FluidSystem::enableVaporizedWater()) {
+                    out[5] += getValue(fs.Rvw()) * weight;
+                }
+                out[6] += weight;
+                out[7] += getValue(fs.saltConcentration()) * weight;
+            };
+
+            accumulate(hpv, cellPv * hydrocarbon);
+            accumulate(pv, cellPv);
+        }
+
+        step.externalRegionSums.assign(hpv.begin(), hpv.end());
+        step.externalRegionSums.insert(step.externalRegionSums.end(), pv.begin(), pv.end());
+    }
+
     // The boundary transmissibilities are not available while the writer is
     // being constructed, so record them the first time a report step is dumped.
     // The consumer uses these to reproduce the parent's inter-cell
@@ -1888,6 +1971,11 @@ private:
                 // this run's hysteresis history.
                 this->collectFluxExteriorRockState_(dumper, step);
             }
+
+            // Written in both modes: a reduced run needs these whatever kind of
+            // boundary it uses, because the averages they rebuild drive the
+            // wells, not the boundary.
+            this->collectFluxConverterExternal_(dumper, step);
 
             dumper.appendReportStep(step);
         }

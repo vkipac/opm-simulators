@@ -207,6 +207,23 @@ namespace Opm {
         this->rateConverter_ = std::make_unique<RateConverterType>
             (std::vector<int>(this->local_num_cells_, 0));
 
+        // A sector run only has part of the original model, so averaging over
+        // its own cells alone would give a well on a reservoir-volume target a
+        // different target than it had in the full model. The run that produced
+        // its boundary data recorded the sums for everything outside, which are
+        // added here.
+        {
+            std::array<Scalar, 8> hydrocarbonPvWeighted{};
+            std::array<Scalar, 8> poreVolumeWeighted{};
+            if (this->simulator_.problem().fluxConverterExternalSums(hydrocarbonPvWeighted,
+                                                                     poreVolumeWeighted))
+            {
+                this->rateConverter_->setExternalContribution(0,
+                                                              hydrocarbonPvWeighted,
+                                                              poreVolumeWeighted);
+            }
+        }
+
         {
             // WELPI scaling runs at start of report step.
             const auto enableWellPIScaling = true;
