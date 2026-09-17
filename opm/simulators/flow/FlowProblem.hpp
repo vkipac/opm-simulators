@@ -2056,6 +2056,7 @@ protected:
         this->fluxBoundary_ = std::make_shared<FluxBoundary>(std::move(fluxBoundary));
         this->collectFluxBoundaryFaceAreas_(numElems);
         this->applyFluxBoundaryTransmissibilityOverrides_();
+        this->reportUnmappedFluxBoundaryFaces_();
 
         OpmLog::info(fmt::format("USEFLUX: {} boundary record(s) read from '{}' ({})",
                                  fluxData.reportSteps.size(),
@@ -2155,6 +2156,48 @@ protected:
                     areas[elemIdx] = is.geometry().volume();
                 }
             }
+        }
+    }
+
+    //! \brief Warn about boundary faces the .FLUX file describes but this grid
+    //!        cannot carry.
+    //!
+    //! \details A face is applied by dividing the stored total rate by the area
+    //!   of the matching grid intersection, so a face with no such intersection
+    //!   silently drops whatever flux the producing run recorded for it. That
+    //!   is a mass leak rather than a small inaccuracy, so it is worth saying
+    //!   out loud.
+    void reportUnmappedFluxBoundaryFaces_()
+    {
+        if (!this->fluxBoundary_) {
+            return;
+        }
+
+        std::size_t unmapped = 0;
+        std::size_t total = 0;
+        for (const auto& face : this->fluxBoundary_->faces()) {
+            if (face.isNnc || face.direction == FaceDir::Unknown) {
+                continue;
+            }
+            if (face.interiorActiveCell < 0) {
+                continue;
+            }
+
+            ++total;
+            const auto area =
+                this->fluxBoundaryFaceAreaAt_(static_cast<unsigned>(face.interiorActiveCell),
+                                              face.direction);
+            if (!(area > 0.0)) {
+                ++unmapped;
+            }
+        }
+
+        if (unmapped > 0) {
+            OpmLog::warning(fmt::format("USEFLUX: {} of {} boundary faces have no matching grid "
+                                        "face in this run, so any flow the producing run recorded "
+                                        "across them is lost. The sector grid and the region the "
+                                        "FLUX file describes do not agree.",
+                                        unmapped, total));
         }
     }
 

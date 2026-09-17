@@ -295,9 +295,21 @@ public:
         auto& vanguard = simulator.vanguard();
         const auto& schedule = vanguard.schedule();
 
+        // Time here is the start of the episode. simulator.time() has not been
+        // advanced yet at this point and timeStepSize() still holds the WHOLE
+        // episode length, so the usual time + timeStepSize would land at the
+        // end of the episode and pick up the parent's state from days later.
+        // That is what produced a one-step excursion at every report step: the
+        // boundary was briefly driven by a far more depleted exterior state.
+        //
+        // The boundary record itself is deliberately not refreshed here.
+        // beginTimeStep runs immediately afterwards for the first step of the
+        // episode and selects it with the proper step size.
+        const auto episodeStart = static_cast<double>(simulator.episodeStartTime())
+                                - static_cast<double>(simulator.startTime());
+
         if (episodeIdx >= 0) {
-            this->refreshFluxBoundaryRecord_(this->fluxParentSummaryTime_());
-            this->seedParentSummaryState_(this->fluxParentSummaryTime_());
+            this->seedParentSummaryState_(episodeStart);
         }
 
         // Evaluate UDQ assign statements to make sure the settings are
@@ -306,7 +318,7 @@ public:
             .evalUDQAssignments(episodeIdx, vanguard.udqState());
 
         if (episodeIdx >= 0) {
-            this->applyFluxGroupTargetCorrection_(episodeIdx, this->fluxParentSummaryTime_());
+            this->applyFluxGroupTargetCorrection_(episodeIdx, episodeStart);
         }
 
         if (episodeIdx >= 0) {
