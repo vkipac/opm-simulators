@@ -390,7 +390,7 @@ namespace {
         // Schedule is created. The Schedule resolves well connections against
         // the grid, so doing this afterwards would leave connections pointing
         // at cells that no longer exist.
-        applyUseFluxActnum(*eclipseState);
+        const auto isSectorRun = applyUseFluxActnum(*eclipseState);
 
         // A fracture model reads its seeds out of the deck during the run, not
         // only at setup, so a FRAC run has to retain the Schedule keywords
@@ -451,6 +451,15 @@ namespace {
                 (deck, *schedule, eclipseState->fieldProps(),
                  eclipseState->aquifer(), *parseContext, errorGuard,
                  std::move(lgrGridDims));
+        }
+
+        if (eclipseState->getIOConfig().getUseFlux()) {
+            // A sector run's FPR covers its own cells only. FPR2 is the same
+            // average taken over the whole of the model the sector came from,
+            // which is what the wells see when a reservoir-volume target is
+            // converted. It is always present, because a sector run cannot
+            // report a field average any other way.
+            summaryConfig->addFieldKeyword("FPR2");
         }
 
         Opm::checkConsistentArrayDimensions(*eclipseState, *schedule,

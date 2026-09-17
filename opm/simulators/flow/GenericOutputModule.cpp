@@ -1137,6 +1137,23 @@ updateSummaryRegionValues(const Inplace& inplace,
                                         true);
         }
 
+        if (this->summaryConfig_.hasKeyword("FPR2")) {
+            // Same average as FPR, but over the whole of the original model.
+            // A reduced run adds the sums its parent recorded for the cells it
+            // does not have; everything else leaves them at zero, and FPR2 is
+            // then identical to FPR.
+            miscSummaryData["FPR2"] =
+                detail::pressureAverage(inplace.get(Inplace::Phase::PressureHydroCarbonPV)
+                                        + this->externalRegionSums_[0],
+                                        inplace.get(Inplace::Phase::HydroCarbonPV)
+                                        + this->externalRegionSums_[6],
+                                        inplace.get(Inplace::Phase::PressurePV)
+                                        + this->externalRegionSums_[8],
+                                        inplace.get(Inplace::Phase::DynamicPoreVolume)
+                                        + this->externalRegionSums_[14],
+                                        true);
+        }
+
         if (this->summaryConfig_.hasKeyword("FPRP")) {
             miscSummaryData["FPRP"] =
                 detail::pressureAverage(inplace.get(Inplace::Phase::PressureHydroCarbonPV),

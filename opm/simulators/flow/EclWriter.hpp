@@ -310,6 +310,25 @@ public:
         const auto localWellTestState = simulator_.problem().wellModel().wellTestState();
         this->prepareLocalCellData(isSubStep, reportStepNum);
 
+        // A sector run reports FPR over its own cells. FPR2 covers the whole of
+        // the model the sector came from, using the sums its parent recorded
+        // for everything outside.
+        {
+            std::array<Scalar, 8> hydrocarbonPvWeighted{};
+            std::array<Scalar, 8> poreVolumeWeighted{};
+            std::array<Scalar, 16> sums{};
+            if (this->simulator_.problem()
+                    .fluxConverterExternalSums(hydrocarbonPvWeighted, poreVolumeWeighted))
+            {
+                std::copy(hydrocarbonPvWeighted.begin(), hydrocarbonPvWeighted.end(),
+                          sums.begin());
+                std::copy(poreVolumeWeighted.begin(), poreVolumeWeighted.end(),
+                          sums.begin() + 8);
+            }
+
+            this->outputModule_->setExternalRegionSums(sums);
+        }
+
         if (this->outputModule_->needInterfaceFluxes(isSubStep)) {
             this->captureLocalFluxData();
         }
