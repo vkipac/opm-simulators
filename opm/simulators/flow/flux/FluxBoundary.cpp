@@ -184,6 +184,31 @@ const EclIO::FluxFile::ReportStep* FluxBoundary::selectReportStep(const EclIO::F
     return &data.reportSteps[index];
 }
 
+const EclIO::FluxFile::ReportStep* FluxBoundary::selectRecordAt(const EclIO::FluxFile::Data& data,
+                                                                 const double time)
+{
+    if (data.reportSteps.empty()) {
+        return nullptr;
+    }
+
+    // A record covers (startTime, startTime + stepLength], and 'time' is the
+    // start of the step that is about to be taken. The record that applies is
+    // therefore the first one that ends strictly after it: a record ending
+    // exactly at 'time' describes flow that has already happened.
+    const auto pos = std::lower_bound(data.reportSteps.begin(), data.reportSteps.end(), time,
+                                      [](const auto& step, const double t)
+                                      {
+                                          return (step.startTime + step.stepLength) <= t;
+                                      });
+
+    if (pos == data.reportSteps.end()) {
+        // After the last record.
+        return &data.reportSteps.back();
+    }
+
+    return &(*pos);
+}
+
 std::array<std::vector<int>, 6> FluxBoundary::buildDirectionalFaceIndices(const std::size_t numActiveCells) const
 {
     std::array<std::vector<int>, 6> directionalFaceIndices;

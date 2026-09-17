@@ -61,6 +61,17 @@ public:
     static const EclIO::FluxFile::ReportStep* selectReportStep(const EclIO::FluxFile::Data& data,
                                                                 int episodeIndex);
 
+    /// Select the boundary record covering \p time, in seconds.
+    ///
+    /// Records cover consecutive intervals \c [startTime, startTime+stepLength],
+    /// so this works whether the producer wrote one record per time step or one
+    /// per report step. Queries outside the recorded range clamp to the first or
+    /// the last record.
+    ///
+    /// Returns nullptr only when there are no records at all.
+    static const EclIO::FluxFile::ReportStep* selectRecordAt(const EclIO::FluxFile::Data& data,
+                                                              double time);
+
     std::array<std::vector<int>, 6> buildDirectionalFaceIndices(std::size_t numActiveCells) const;
     const Face* faceFromSlot(int slot) const;
 

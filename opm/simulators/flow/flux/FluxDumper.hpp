@@ -49,6 +49,7 @@ public:
         std::vector<double> rs;
         std::vector<double> rv;
         std::vector<double> temperature;
+        std::vector<double> massRates;
     };
 
     FluxDumper(std::string parentCaseName,
@@ -89,6 +90,10 @@ public:
     /// Record the minimum interval, in seconds, enforced between consecutive
     /// summary samples.  Diagnostic only.
     void setSummaryMinSampleInterval(double interval);
+
+    /// Record the minimum interval, in seconds, enforced between consecutive
+    /// boundary records.  Diagnostic only.
+    void setBoundaryMinSampleInterval(double interval);
 
     void setBoundaryTransmissibilities(const std::vector<double>& boundaryTransmissibilities);
 

@@ -180,6 +180,18 @@ public:
              "Smaller values improve the accuracy of the interpolation done by "
              "a USEFLUX run, at the cost of a larger .FLUX file. Use 0 to "
              "sample every time step.");
+        Parameters::Register<Parameters::FluxBoundaryMinIntervalBetweenSamples<Scalar>>
+            ("Minimum time in days between consecutive sector boundary records "
+             "written to the .FLUX file by a DUMPFLUX run. Every time step is "
+             "written unless that would place the record within this interval "
+             "of the previous one; report step boundaries are always written. "
+             "Use 0 to write every time step. Ignored when "
+             "--flux-boundary-report-steps-only is set.");
+        Parameters::Register<Parameters::FluxBoundaryReportStepsOnly>
+            ("Write sector boundary data once per report step rather than per "
+             "time step. This restores the behaviour of earlier versions and is "
+             "generally less accurate for models whose boundary flow varies "
+             "within a report step.");
     }
 
     // The Simulator object should preferably have been const - the
@@ -669,43 +681,116 @@ public:
             this->fluxRateSnapshots_.assign(this->fluxDumpers_.size(), {});
         }
 
+        if (this->fluxMassSnapshots_.size() != this->fluxDumpers_.size()) {
+            this->fluxMassSnapshots_.assign(this->fluxDumpers_.size(), {});
+        }
+
+        // Phase density of a cell, or zero when it is not available.
+        const auto phaseDensity = [&vanguard, this](const int globalCell,
+                                                    const EclIO::FluxFile::Phase phase) -> double
+        {
+            const auto cell = vanguard.compressedIndex(globalCell);
+            if (cell < 0) {
+                return 0.0;
+            }
+
+            const auto phaseIdx = this->fluxPhaseIndex_(phase);
+            if (!FluidSystem::phaseIsActive(phaseIdx)) {
+                return 0.0;
+            }
+
+            const auto* intQuants =
+                this->simulator_.model().cachedIntensiveQuantities(cell, /*timeIdx=*/0);
+            if (intQuants == nullptr) {
+                return 0.0;
+            }
+
+            return getValue(intQuants->fluidState().density(phaseIdx));
+        };
+
+        const auto orientedFaceValue = [this](const auto& accessor,
+                                              const FluxRegions::BoundaryFace& face,
+                                              const EclIO::FluxFile::Phase phase) -> double
+        {
+            if (face.isNnc || face.direction == FaceDir::Unknown) {
+                return 0.0;
+            }
+
+            const auto eqIdx = this->fluxEquationIndex_(phase);
+            if (eqIdx < 0) {
+                return 0.0;
+            }
+
+            // Values are stored per cell for the positive face directions only
+            // and are oriented along the positive axis, while the FLUX file is
+            // positive into the sector.
+            switch (face.direction) {
+            case FaceDir::XPlus:
+            case FaceDir::YPlus:
+            case FaceDir::ZPlus:
+                return -accessor(face.interiorGlobalCell, face.direction, eqIdx);
+
+            case FaceDir::XMinus:
+                return accessor(face.exteriorGlobalCell, FaceDir::XPlus, eqIdx);
+
+            case FaceDir::YMinus:
+                return accessor(face.exteriorGlobalCell, FaceDir::YPlus, eqIdx);
+
+            case FaceDir::ZMinus:
+                return accessor(face.exteriorGlobalCell, FaceDir::ZPlus, eqIdx);
+
+            default:
+                return 0.0;
+            }
+        };
+
         for (std::size_t i = 0; i < this->fluxDumpers_.size(); ++i) {
             this->fluxRateSnapshots_[i].push_back(
                 this->fluxDumpers_[i].makeFaceMajorRates(
-                    [&floresValue, this](const FluxRegions::BoundaryFace& face,
-                                         const EclIO::FluxFile::Phase phase)
+                    [&orientedFaceValue, &floresValue](const FluxRegions::BoundaryFace& face,
+                                                       const EclIO::FluxFile::Phase phase)
                     {
-                        if (face.isNnc || face.direction == FaceDir::Unknown) {
-                            return 0.0;
-                        }
-
-                        const auto eqIdx = this->fluxEquationIndex_(phase);
-                        if (eqIdx < 0) {
-                            return 0.0;
-                        }
-
-                        // FLORES is stored per cell for the positive face
-                        // directions only and is oriented along the positive
-                        // axis, while the FLUX file is positive into the sector.
-                        switch (face.direction) {
-                        case FaceDir::XPlus:
-                        case FaceDir::YPlus:
-                        case FaceDir::ZPlus:
-                            return -floresValue(face.interiorGlobalCell, face.direction, eqIdx);
-
-                        case FaceDir::XMinus:
-                            return floresValue(face.exteriorGlobalCell, FaceDir::XPlus, eqIdx);
-
-                        case FaceDir::YMinus:
-                            return floresValue(face.exteriorGlobalCell, FaceDir::YPlus, eqIdx);
-
-                        case FaceDir::ZMinus:
-                            return floresValue(face.exteriorGlobalCell, FaceDir::ZPlus, eqIdx);
-
-                        default:
-                            return 0.0;
-                        }
+                        return orientedFaceValue(floresValue, face, phase);
                     }));
+
+            // Convert to a mass flux here, where the density of the cell the
+            // flow actually comes from is known. A reduced run cannot do this
+            // for inflow, because that upstream cell lies outside its grid.
+            auto massSnapshot = this->fluxDumpers_[i].makeFaceMajorRates(
+                [&orientedFaceValue, &floresValue, &phaseDensity]
+                (const FluxRegions::BoundaryFace& face, const EclIO::FluxFile::Phase phase)
+                {
+                    const auto volRate = orientedFaceValue(floresValue, face, phase);
+                    if (volRate == 0.0) {
+                        return 0.0;
+                    }
+
+                    // Positive is into the sector, so inflow comes from the
+                    // exterior cell and outflow from the interior one.
+                    const auto upstream = (volRate > 0.0)
+                        ? face.exteriorGlobalCell
+                        : face.interiorGlobalCell;
+
+                    auto rho = phaseDensity(upstream, phase);
+                    if (!(rho > 0.0)) {
+                        // Fall back to the other side rather than dropping the
+                        // flux, e.g. when the upstream cell is inactive.
+                        const auto other = (volRate > 0.0)
+                            ? face.interiorGlobalCell
+                            : face.exteriorGlobalCell;
+                        rho = phaseDensity(other, phase);
+                    }
+
+                    return (rho > 0.0) ? (volRate * rho) : 0.0;
+                });
+
+            if (std::any_of(massSnapshot.begin(), massSnapshot.end(),
+                            [](const double v) { return v != 0.0; }))
+            {
+                this->fluxMassUsable_ = true;
+            }
+
+            this->fluxMassSnapshots_[i].push_back(std::move(massSnapshot));
         }
 
         this->fluxRateTimeWeights_.push_back(static_cast<double>(dt));
@@ -1139,6 +1224,20 @@ private:
         return FluidSystem::oilCompIdx;
     }
 
+    int fluxPhaseIndex_(const EclIO::FluxFile::Phase phase) const
+    {
+        switch (phase) {
+        case EclIO::FluxFile::Phase::Oil:
+            return FluidSystem::oilPhaseIdx;
+        case EclIO::FluxFile::Phase::Water:
+            return FluidSystem::waterPhaseIdx;
+        case EclIO::FluxFile::Phase::Gas:
+            return FluidSystem::gasPhaseIdx;
+        }
+
+        return FluidSystem::oilPhaseIdx;
+    }
+
     int fluxEquationIndex_(const EclIO::FluxFile::Phase phase) const
     {
         switch (phase) {
@@ -1298,6 +1397,33 @@ private:
         this->fluxSummaryMinInterval_ =
             unit::convert::from(static_cast<double>(intervalInDays), unit::day);
 
+        const auto boundaryIntervalInDays = Parameters::Get<
+            Parameters::FluxBoundaryMinIntervalBetweenSamples<Scalar>>();
+
+        this->fluxBoundaryMinInterval_ =
+            unit::convert::from(static_cast<double>(boundaryIntervalInDays), unit::day);
+
+        this->fluxBoundaryReportStepsOnly_ =
+            Parameters::Get<Parameters::FluxBoundaryReportStepsOnly>();
+
+        this->fluxBoundaryWindowStart_ = 0.0;
+        this->fluxBoundaryHasRecord_ = false;
+
+        for (auto& dumper : this->fluxDumpers_) {
+            dumper.setBoundaryMinSampleInterval(this->fluxBoundaryReportStepsOnly_
+                                                ? 0.0
+                                                : this->fluxBoundaryMinInterval_);
+        }
+
+        if (this->fluxBoundaryReportStepsOnly_) {
+            OpmLog::note("DUMPFLUX will write sector boundary data once per report step");
+        }
+        else {
+            OpmLog::note(fmt::format("DUMPFLUX will write sector boundary data every time "
+                                     "step, at most every {} day(s)",
+                                     boundaryIntervalInDays));
+        }
+
         this->fluxSummaryKeyList_ = this->fluxSummaryKeys_();
 
         this->fluxSummaryKeyTypes_.clear();
@@ -1437,7 +1563,26 @@ private:
 
     void updateFluxDumpers_(const int reportStepNum, const bool isSubStep)
     {
-        if (isSubStep || this->fluxDumpers_.empty()) {
+        if (this->fluxDumpers_.empty()) {
+            return;
+        }
+
+        // Boundary flow generally varies within a report step, so a record is
+        // written per time step by default. The throttle keeps that from
+        // producing an unreasonable number of records when the time steps are
+        // short; report step boundaries are always written, so the
+        // report-step-only behaviour is a strict subset of the default.
+        const auto endTime = static_cast<double>(simulator_.time())
+            + static_cast<double>(simulator_.timeStepSize());
+        const auto elapsed = endTime - this->fluxBoundaryWindowStart_;
+
+        const bool emit = this->fluxBoundaryReportStepsOnly_
+            ? !isSubStep
+            : (!isSubStep
+               || !this->fluxBoundaryHasRecord_
+               || (elapsed >= this->fluxBoundaryMinInterval_));
+
+        if (!emit) {
             return;
         }
 
@@ -1448,8 +1593,12 @@ private:
             ? this->collectOnIORank_.globalFloresn()
             : flows.getFloresn();
         const auto simStep = simulator_.timeStepIndex();
-        const auto startTime = simulator_.time();
-        const auto stepLength = simulator_.timeStepSize();
+
+        // The record covers everything since the previous record, which is not
+        // the same as the last time step once several steps are accumulated.
+        const auto startTime = this->fluxBoundaryWindowStart_;
+        const auto stepLength = endTime - this->fluxBoundaryWindowStart_;
+
         const auto pressurePhaseIdx = FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)
             ? FluidSystem::oilPhaseIdx
             : (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)
@@ -1491,10 +1640,27 @@ private:
                                                 stepLength);
 
             if (haveAggregatedRates) {
-                // Time-weighted average over the report step's time steps.
+                // Time-weighted average over the time steps that make up this
+                // record's window, so that a consumer holding the value
+                // constant across the window reproduces the flow over it.
                 step.rates = FluxDumper::aggregateRates(EclIO::FluxFile::Sampling::Averaged,
                                                         this->fluxRateSnapshots_[dumperIdx],
                                                         this->fluxRateTimeWeights_);
+
+                // Same treatment for the mass flux, so that the value a
+                // consumer holds across the window is the mass actually
+                // transferred over it, independent of how the window was
+                // subdivided.
+                if (this->fluxMassUsable_
+                    && (dumperIdx < this->fluxMassSnapshots_.size())
+                    && (this->fluxMassSnapshots_[dumperIdx].size()
+                        == this->fluxRateTimeWeights_.size()))
+                {
+                    step.massRates =
+                        FluxDumper::aggregateRates(EclIO::FluxFile::Sampling::Averaged,
+                                                   this->fluxMassSnapshots_[dumperIdx],
+                                                   this->fluxRateTimeWeights_);
+                }
             }
             else if (haveCapturedRates) {
                 // Cartesian contributions were sampled before the FLORES buffers
@@ -1590,13 +1756,22 @@ private:
             dumper.appendReportStep(step);
         }
 
-        // Start a fresh accumulation window for the next report step.
+        // Start a fresh accumulation window for the next record.
         for (auto& snapshots : this->fluxRateSnapshots_) {
             snapshots.clear();
         }
+        for (auto& snapshots : this->fluxMassSnapshots_) {
+            snapshots.clear();
+        }
         this->fluxRateTimeWeights_.clear();
+        this->fluxBoundaryWindowStart_ = endTime;
+        this->fluxBoundaryHasRecord_ = true;
 
-        this->writeFluxDumpers_();
+        // The whole file is rewritten on every write, so only do so at report
+        // step boundaries rather than for every throttled record.
+        if (!isSubStep) {
+            this->writeFluxDumpers_();
+        }
     }
 
     void writeFluxDumpers_() const
@@ -1840,6 +2015,7 @@ private:
     std::map<std::pair<int, int>, int> fluxNncPairToIndex_;
     std::vector<std::vector<double>> fluxCapturedFaceRates_;
     std::vector<std::vector<std::vector<double>>> fluxRateSnapshots_;
+    std::vector<std::vector<std::vector<double>>> fluxMassSnapshots_;
     std::vector<double> fluxRateTimeWeights_;
     std::vector<std::string> fluxSummaryKeyList_;
     std::vector<SummaryConfigNode::Type> fluxSummaryKeyTypes_;
@@ -1848,6 +2024,11 @@ private:
     double fluxSummaryLastSampleTime_ = 0.0;
     double fluxSummaryMinInterval_ = 0.0;
     bool fluxSummaryHasSample_ = false;
+    double fluxBoundaryMinInterval_ = 0.0;
+    double fluxBoundaryWindowStart_ = 0.0;
+    bool fluxBoundaryHasRecord_ = false;
+    bool fluxBoundaryReportStepsOnly_ = false;
+    bool fluxMassUsable_ = false;
     bool fluxMissingFloresReported_ = false;
     bool fluxTransmissibilitiesAssigned_ = false;
 };

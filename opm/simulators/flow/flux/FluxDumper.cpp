@@ -230,9 +230,37 @@ void FluxDumper::appendReportStep(const ReportStepData& stepData)
     step.rs = stepData.rs;
     step.rv = stepData.rv;
     step.temperature = stepData.temperature;
+    step.massRates = stepData.massRates;
+
+    // Mass rates are stored as one flat array, so they have to be present on
+    // every record or on none. The first record is emitted before any flux has
+    // been sampled, so back-fill it rather than dropping the whole series.
+    const auto anyMassRates = !step.massRates.empty()
+        || std::any_of(this->data_.reportSteps.begin(), this->data_.reportSteps.end(),
+                       [](const auto& existing) { return !existing.massRates.empty(); });
+
+    if (anyMassRates) {
+        if (step.massRates.empty()) {
+            step.massRates.assign(step.rates.size(), 0.0);
+        }
+
+        for (auto& existing : this->data_.reportSteps) {
+            if (existing.massRates.empty()) {
+                existing.massRates.assign(existing.rates.size(), 0.0);
+            }
+        }
+    }
 
     if (!step.temperature.empty()) {
         this->data_.header.hasTemperature = true;
+    }
+
+    // Several records sharing a report step means the boundary data was
+    // written at sub-report-step resolution.
+    if (!this->data_.reportSteps.empty()
+        && (this->data_.reportSteps.back().reportStep == step.reportStep))
+    {
+        this->data_.header.boundaryPerTimestep = true;
     }
 
     this->data_.reportSteps.push_back(std::move(step));
@@ -270,6 +298,11 @@ void FluxDumper::appendSummarySample(const double time, std::vector<double> valu
 void FluxDumper::setSummaryMinSampleInterval(const double interval)
 {
     this->data_.header.summaryMinSampleInterval = interval;
+}
+
+void FluxDumper::setBoundaryMinSampleInterval(const double interval)
+{
+    this->data_.header.boundaryMinSampleInterval = interval;
 }
 
 const EclIO::FluxFile::Data& FluxDumper::data() const

@@ -385,3 +385,92 @@ BOOST_AUTO_TEST_CASE(SelectInputPathPrefersLowestValidAmongMixedCandidates)
 
     std::filesystem::remove_all(dir);
 }
+
+namespace {
+
+// Three consecutive records covering (0,10], (10,30] and (30,60] seconds.
+Opm::EclIO::FluxFile::Data makeRecordSeries()
+{
+    Opm::EclIO::FluxFile::Data data;
+
+    data.reportSteps.resize(3);
+
+    data.reportSteps[0].reportStep = 1;
+    data.reportSteps[0].startTime = 0.0;
+    data.reportSteps[0].stepLength = 10.0;
+
+    data.reportSteps[1].reportStep = 1;
+    data.reportSteps[1].startTime = 10.0;
+    data.reportSteps[1].stepLength = 20.0;
+
+    data.reportSteps[2].reportStep = 2;
+    data.reportSteps[2].startTime = 30.0;
+    data.reportSteps[2].stepLength = 30.0;
+
+    return data;
+}
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(SelectsRecordCoveringTheQueryTime)
+{
+    const auto data = makeRecordSeries();
+
+    // Strictly inside a record.
+    BOOST_CHECK_EQUAL(Opm::FluxBoundary::selectRecordAt(data, 5.0)->startTime, 0.0);
+    BOOST_CHECK_EQUAL(Opm::FluxBoundary::selectRecordAt(data, 20.0)->startTime, 10.0);
+    BOOST_CHECK_EQUAL(Opm::FluxBoundary::selectRecordAt(data, 45.0)->startTime, 30.0);
+}
+
+BOOST_AUTO_TEST_CASE(RecordBoundaryBelongsToTheRecordThatStartsThere)
+{
+    const auto data = makeRecordSeries();
+
+    // A query exactly on a boundary must resolve to the record that BEGINS
+    // there, not the one that ends there. Time steps are queried by their
+    // start time, so getting this wrong shifts every step onto the previous
+    // record and replays flow that has already happened.
+    BOOST_CHECK_EQUAL(Opm::FluxBoundary::selectRecordAt(data, 10.0)->startTime, 10.0);
+    BOOST_CHECK_EQUAL(Opm::FluxBoundary::selectRecordAt(data, 30.0)->startTime, 30.0);
+    BOOST_CHECK_EQUAL(Opm::FluxBoundary::selectRecordAt(data, 60.0)->startTime, 30.0);
+}
+
+BOOST_AUTO_TEST_CASE(ClampsOutsideTheRecordedRange)
+{
+    const auto data = makeRecordSeries();
+
+    BOOST_CHECK_EQUAL(Opm::FluxBoundary::selectRecordAt(data, -5.0)->startTime, 0.0);
+    BOOST_CHECK_EQUAL(Opm::FluxBoundary::selectRecordAt(data, 0.0)->startTime, 0.0);
+    BOOST_CHECK_EQUAL(Opm::FluxBoundary::selectRecordAt(data, 1.0e6)->startTime, 30.0);
+}
+
+BOOST_AUTO_TEST_CASE(SelectsFromASingleRecord)
+{
+    auto data = makeRecordSeries();
+    data.reportSteps.resize(1);
+
+    BOOST_CHECK_EQUAL(Opm::FluxBoundary::selectRecordAt(data, -1.0)->startTime, 0.0);
+    BOOST_CHECK_EQUAL(Opm::FluxBoundary::selectRecordAt(data, 5.0)->startTime, 0.0);
+    BOOST_CHECK_EQUAL(Opm::FluxBoundary::selectRecordAt(data, 500.0)->startTime, 0.0);
+}
+
+BOOST_AUTO_TEST_CASE(SelectsNothingWithoutRecords)
+{
+    const Opm::EclIO::FluxFile::Data data;
+
+    BOOST_CHECK(Opm::FluxBoundary::selectRecordAt(data, 1.0) == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(RecordsTileTheTimeAxisWithoutGaps)
+{
+    const auto data = makeRecordSeries();
+
+    // Consecutive records must join exactly: a gap or an overlap would either
+    // drop or double count the flow across the boundary.
+    for (std::size_t i = 1; i < data.reportSteps.size(); ++i) {
+        const auto previousEnd = data.reportSteps[i - 1].startTime
+            + data.reportSteps[i - 1].stepLength;
+
+        BOOST_CHECK_CLOSE(data.reportSteps[i].startTime, previousEnd, 1e-12);
+    }
+}

@@ -1247,7 +1247,14 @@ public:
         const bool hasDeckBc = globalSpaceIdx < bcDirIndex.size() && bcDirIndex[globalSpaceIdx] != 0;
         if (!hasDeckBc) {
             RateVector phaseVolRate = 0.0;
-            if (this->fluxBoundaryPhaseVolumetricRate_(globalSpaceIdx, dir, phaseVolRate)) {
+            bool isMassRate = false;
+            if (this->fluxBoundaryRate_(globalSpaceIdx, dir, phaseVolRate, isMassRate)) {
+                if (isMassRate) {
+                    // The producing run already formed the mass rate, using the
+                    // density of the cell the flow comes from. Nothing to do.
+                    return { BCType::RATE, phaseVolRate };
+                }
+
                 // The FLUX payload holds reservoir-condition volumetric rates, so
                 // the conversion to a mass rate has to use the in-situ density.
                 // Using the surface reference density would overstate the
@@ -1348,9 +1355,15 @@ public:
     }
 
 protected:
-    bool fluxBoundaryPhaseVolumetricRate_(const unsigned int globalSpaceIdx,
-                                          const FaceDir::DirEnum dir,
-                                          RateVector& phaseVolRate) const
+    //! \brief Boundary rate for a face, as stored by the producing run.
+    //!
+    //! \param[out] isMassRate Set when the returned vector holds component mass
+    //!   rates, which can be imposed directly. Otherwise it holds reservoir
+    //!   volumetric rates, which still have to be converted through a density.
+    bool fluxBoundaryRate_(const unsigned int globalSpaceIdx,
+                           const FaceDir::DirEnum dir,
+                           RateVector& phaseVolRate,
+                           bool& isMassRate) const
     {
         const auto& bcDirIndex = bcindex_(dir);
         const bool hasDeckBc = globalSpaceIdx < bcDirIndex.size() && bcDirIndex[globalSpaceIdx] != 0;
@@ -1383,9 +1396,16 @@ protected:
         const auto base = faceIndex * phaseCount;
         std::size_t phaseSlot = 0;
 
-        // The stored rates are total volumetric rates across the face, positive
-        // into the sector. The linearizer multiplies the boundary rate vector by
-        // the face area, and opm-models orients boundary rates along the outer
+        // Prefer the mass rates when the producing run supplied them. Imposing
+        // those needs no density, so the mass taken in does not depend on how
+        // the flow was distributed over the producer's time steps, nor on this
+        // run having to guess the density of a cell outside its own grid.
+        isMassRate = (fluxStep->massRates.size() == expectedSize);
+        const auto& storedRates = isMassRate ? fluxStep->massRates : fluxStep->rates;
+
+        // The stored rates are totals across the face, positive into the
+        // sector. The linearizer multiplies the boundary rate vector by the
+        // face area, and opm-models orients boundary rates along the outer
         // normal, i.e. a flux into the domain is negative. Convert accordingly.
         const auto faceArea = this->fluxBoundaryFaceAreaAt_(globalSpaceIdx, dir);
         if (!(faceArea > 0.0)) {
@@ -1397,23 +1417,24 @@ protected:
         if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Oil)) {
             if (FluidSystem::phaseIsActive(oilPhaseIdx)) {
                 phaseVolRate[FluidSystem::canonicalToActiveCompIdx(oilCompIdx)] =
-                    fluxStep->rates[base + phaseSlot] * areaScale;
+                    storedRates[base + phaseSlot] * areaScale;
             }
             ++phaseSlot;
         }
         if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Water)) {
             if (FluidSystem::phaseIsActive(waterPhaseIdx)) {
                 phaseVolRate[FluidSystem::canonicalToActiveCompIdx(waterCompIdx)] =
-                    fluxStep->rates[base + phaseSlot] * areaScale;
+                    storedRates[base + phaseSlot] * areaScale;
             }
             ++phaseSlot;
         }
         if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Gas)) {
             if (FluidSystem::phaseIsActive(gasPhaseIdx)) {
                 phaseVolRate[FluidSystem::canonicalToActiveCompIdx(gasCompIdx)] =
-                    fluxStep->rates[base + phaseSlot] * areaScale;
+                    storedRates[base + phaseSlot] * areaScale;
             }
         }
+
 
         return true;
     }
@@ -1447,14 +1468,24 @@ protected:
         return &this->fluxBoundary_->data();
     }
 
+    //! \brief The boundary record that applies to the current time step.
+    //!
+    //! \details Resolved once per time step by refreshFluxBoundaryRecord_().
+    //!          This is read per boundary face per Newton iteration during
+    //!          assembly, so it must not search the record list.
     const EclIO::FluxFile::ReportStep* fluxBoundaryReportStep_() const
     {
-        const auto* data = this->fluxBoundaryData_();
-        if (!data) {
-            return nullptr;
-        }
+        return this->fluxBoundaryActiveRecord_;
+    }
 
-        return FluxBoundary::selectReportStep(*data, this->episodeIndex());
+    //! \brief Point the cached boundary record at the record covering \p time.
+    void refreshFluxBoundaryRecord_(const double time)
+    {
+        const auto* data = this->fluxBoundaryData_();
+
+        this->fluxBoundaryActiveRecord_ = (data == nullptr)
+            ? nullptr
+            : FluxBoundary::selectRecordAt(*data, time);
     }
 
     //! \brief The parent run's summary vectors, or nullptr when unavailable.
@@ -1975,6 +2006,17 @@ protected:
         this->collectFluxBoundaryFaceAreas_(numElems);
         this->applyFluxBoundaryTransmissibilityOverrides_();
 
+        OpmLog::info(fmt::format("USEFLUX: {} boundary record(s) read from '{}' ({})",
+                                 fluxData.reportSteps.size(),
+                                 selectedFluxPath.string(),
+                                 fluxData.header.boundaryPerTimestep
+                                 ? "per time step"
+                                 : "per report step"));
+
+        // Start out on the record covering the initial time, so that the very
+        // first assembly does not run without one.
+        this->refreshFluxBoundaryRecord_(0.0);
+
         if (!this->fluxBoundary_->faces().empty()) {
             this->nonTrivialBoundaryConditions_ = true;
         }
@@ -2272,6 +2314,7 @@ protected:
     BCData<Scalar> fluxBoundaryFaceArea_;
     std::shared_ptr<FluxBoundary> fluxBoundary_;
     std::shared_ptr<ParentSummary> fluxParentSummaryData_;
+    const EclIO::FluxFile::ReportStep* fluxBoundaryActiveRecord_ = nullptr;
     bool nonTrivialBoundaryConditions_ = false;
     bool first_step_ = true;
 

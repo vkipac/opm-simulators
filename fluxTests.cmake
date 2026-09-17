@@ -300,7 +300,6 @@ if (BUILD_FLOW)
     )
 
     set(_twowell_useflux_smry_fallback_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+twowell_useflux_smry_fallback_smoke)
-
     opm_add_test(twowell_useflux_smry_fallback_smoke
       DEPENDS
         flux_smoke_mutate
@@ -329,6 +328,22 @@ if (BUILD_FLOW)
         -r ${_twowell_useflux_inactive_result_path}
         -f TWOWELL_DUMPFLUX_INACTIVE_2D
         -p "bash ${PROJECT_SOURCE_DIR}/tests/check-twowell-useflux-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_COMPARE_ECL_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_DUMPFLUX_INACTIVE_2D.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_USEFLUX_INACTIVE_2D.DATA"
+    )
+
+    set(_twowell_useflux_cadence_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+twowell_useflux_cadence_smoke)
+
+    # Boundary data is written per time step by default; the report-step cadence
+    # of earlier versions remains available behind a switch.
+    opm_add_test(twowell_useflux_cadence_smoke
+      DEPENDS
+        flux_smoke_shape_check
+      EXE_TARGET
+        flow_blackoil
+      DRIVER_ARGS
+        -i ${PROJECT_SOURCE_DIR}/tests/data/sector
+        -r ${_twowell_useflux_cadence_result_path}
+        -f TWOWELL_DUMPFLUX_FLUX_1D
+        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-twowell-useflux-cadence-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_COMPARE_ECL_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_DUMPFLUX_FLUX_1D.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_USEFLUX_FLUX_1D.DATA"
     )
   endif()
 

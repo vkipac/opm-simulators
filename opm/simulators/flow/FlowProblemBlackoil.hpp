@@ -296,6 +296,7 @@ public:
         const auto& schedule = vanguard.schedule();
 
         if (episodeIdx >= 0) {
+            this->refreshFluxBoundaryRecord_(this->fluxParentSummaryTime_());
             this->seedParentSummaryState_(this->fluxParentSummaryTime_());
         }
 
@@ -600,6 +601,7 @@ public:
         // step, so this has to follow the time step cadence rather than being
         // applied once per report step.
         const auto time = this->fluxParentSummaryTime_();
+        this->refreshFluxBoundaryRecord_(time);
         this->seedParentSummaryState_(time);
         this->applyFluxGroupTargetCorrection_(this->simulator().episodeIndex(), time);
 
@@ -1461,13 +1463,22 @@ public:
 
             RateVector phaseVolRate = 0.0;
             const auto dir = FaceDir::FromIntersectionIndex(indexInInside);
-            if (this->fluxBoundaryPhaseVolumetricRate_(globalDofIdx, dir, phaseVolRate)) {
-                const auto& insideFs = context.intensiveQuantities(interiorDofIdx, timeIdx).fluidState();
-                values.setMassRate(this->fluxPhaseVolToMassRate_(phaseVolRate,
-                                                                 insideFs,
-                                                                 globalDofIdx,
-                                                                 indexInInside),
-                                   pvtRegionIdx);
+            bool isMassRate = false;
+            if (this->fluxBoundaryRate_(globalDofIdx, dir, phaseVolRate, isMassRate)) {
+                if (isMassRate) {
+                    // Already a mass rate, formed by the producing run with the
+                    // density of the cell the flow comes from.
+                    values.setMassRate(phaseVolRate, pvtRegionIdx);
+                }
+                else {
+                    const auto& insideFs =
+                        context.intensiveQuantities(interiorDofIdx, timeIdx).fluidState();
+                    values.setMassRate(this->fluxPhaseVolToMassRate_(phaseVolRate,
+                                                                     insideFs,
+                                                                     globalDofIdx,
+                                                                     indexInInside),
+                                       pvtRegionIdx);
+                }
                 return;
             }
 
