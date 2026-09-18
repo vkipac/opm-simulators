@@ -69,6 +69,9 @@
 
 #include <boost/date_time/posix_time/posix_time.hpp>
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -79,6 +82,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -1475,6 +1479,65 @@ private:
             : std::make_pair(c2, c1);
     }
 
+    // A sector boundary cuts the grid, and a well with completions on both
+    // sides of it cannot be reproduced by a reduced run: that run sees only the
+    // connections inside its own region but solves the well as though it were
+    // whole, so its rates and its bottom hole pressure are both wrong. Refuse
+    // to write a FLUX file that could only be used incorrectly.
+    void checkWellsWithinSingleFluxRegion_(const std::vector<int>& regionValues,
+                                           const std::array<int, 3>& dims) const
+    {
+        const auto numCells = static_cast<std::size_t>(dims[0])
+            * static_cast<std::size_t>(dims[1])
+            * static_cast<std::size_t>(dims[2]);
+
+        // Completions are added as the schedule advances, so the whole of it
+        // has to be walked rather than just the final state.
+        std::map<std::string, std::set<int>> wellRegions;
+
+        const auto& sched = this->schedule();
+        for (std::size_t step = 0; step < sched.size(); ++step) {
+            for (const auto& well : sched.getWells(step)) {
+                auto& regions = wellRegions[well.name()];
+
+                for (const auto& conn : well.getConnections()) {
+                    const auto cell = conn.global_index();
+                    if (cell >= numCells) {
+                        continue;
+                    }
+
+                    // Zero means the cell belongs to no region at all.
+                    if (regionValues[cell] > 0) {
+                        regions.insert(regionValues[cell]);
+                    }
+                }
+            }
+        }
+
+        std::vector<std::string> offenders;
+        for (const auto& [name, regions] : wellRegions) {
+            if (regions.size() < 2) {
+                continue;
+            }
+
+            offenders.push_back(fmt::format("  {} is completed in flux regions {}",
+                                            name, fmt::join(regions, ", ")));
+        }
+
+        if (offenders.empty()) {
+            return;
+        }
+
+        OPM_THROW(std::invalid_argument,
+                  fmt::format("DUMPFLUX requires every well to be completed within a single "
+                              "FLUXNUM region. A reduced run covering one region would see "
+                              "only the part of a straddling well that falls inside it, but "
+                              "would solve that well as though it were whole. Offending "
+                              "wells:\n{}\nEither move the region boundary clear of these "
+                              "completions or keep the wells out of the sector.",
+                              fmt::join(offenders, "\n")));
+    }
+
     void initializeFluxDumpers_()
     {
         if (!this->collectOnIORank_.isIORank()) {
@@ -1503,6 +1566,8 @@ private:
         const auto regionValues = fieldProps.get_global_int("FLUXNUM");
         const auto& actnum = fieldProps.actnumRaw();
         const auto dims = state.gridDims().getNXYZ();
+
+        this->checkWellsWithinSingleFluxRegion_(regionValues, dims);
 
         std::vector<std::array<int, 2>> nncConnections;
         this->fluxNncPairToIndex_.clear();
