@@ -237,6 +237,7 @@ public:
         }
 
         this->rank_ = this->simulator_.vanguard().grid().comm().rank();
+        this->checkWellsWithinSingleFluxRegion_();
         this->initializeFluxDumpers_();
 
         this->simulator_.vanguard().eclState().computeFipRegionStatistics();
@@ -1482,10 +1483,59 @@ private:
     // A sector boundary cuts the grid, and a well with completions on both
     // sides of it cannot be reproduced by a reduced run: that run sees only the
     // connections inside its own region but solves the well as though it were
-    // whole, so its rates and its bottom hole pressure are both wrong. Refuse
-    // to write a FLUX file that could only be used incorrectly.
-    void checkWellsWithinSingleFluxRegion_(const std::vector<int>& regionValues,
-                                           const std::array<int, 3>& dims) const
+    // whole, so both its rates and its bottom hole pressure come out wrong.
+    // Refuse to write a FLUX file that could only be used incorrectly.
+    //
+    // The ground outside every region counts as a region of its own here. A
+    // well reaching out of the sector is just as badly served by a reduced run
+    // as one reaching into a neighbouring sector.
+    //
+    // Only the I/O rank holds the global field properties, so only it can tell,
+    // but the verdict is shared so that every rank leaves through the same door
+    // and MPI shuts down cleanly.
+    void checkWellsWithinSingleFluxRegion_() const
+    {
+        auto excType = ExceptionType::NONE;
+        auto message = std::string
+            {"DUMPFLUX requires every well to be completed within a single FLUXNUM "
+             "region. The offending wells are listed on the I/O rank."};
+
+        if (this->collectOnIORank_.isIORank()) {
+            const auto& state = this->eclState();
+            const auto& fieldProps = state.globalFieldProps();
+
+            if (!state.getIOConfig().getUseFlux() && fieldProps.has_int("FLUXNUM")) {
+                const auto offenders =
+                    this->wellsStraddlingFluxRegions_(fieldProps.get_global_int("FLUXNUM"),
+                                                      fieldProps.actnumRaw(),
+                                                      state.gridDims().getNXYZ());
+
+                if (!offenders.empty()) {
+                    excType = ExceptionType::INVALID_ARGUMENT;
+                    message = fmt::format(
+                        "DUMPFLUX requires every well to be completed within a single "
+                        "FLUXNUM region. A reduced run covering one region would see only "
+                        "the part of a straddling well that falls inside it, but would "
+                        "solve that well as though it were whole. Offending wells:\n{}\n"
+                        "Either move the region boundary clear of these completions or "
+                        "keep the wells out of the sector.",
+                        fmt::join(offenders, "\n"));
+
+                    // Put it in the print file as well, so the list survives
+                    // the run rather than only reaching the terminal.
+                    OpmLog::error(message);
+                }
+            }
+        }
+
+        checkForExceptionsAndThrow(excType, message,
+                                   this->simulator_.vanguard().grid().comm());
+    }
+
+    std::vector<std::string>
+    wellsStraddlingFluxRegions_(const std::vector<int>& regionValues,
+                                const std::vector<int>& actnum,
+                                const std::array<int, 3>& dims) const
     {
         const auto numCells = static_cast<std::size_t>(dims[0])
             * static_cast<std::size_t>(dims[1])
@@ -1506,10 +1556,14 @@ private:
                         continue;
                     }
 
-                    // Zero means the cell belongs to no region at all.
-                    if (regionValues[cell] > 0) {
-                        regions.insert(regionValues[cell]);
+                    // A connection in a cell the grid does not have is not a
+                    // connection at all, and counting the region of such a cell
+                    // would report wells that are in fact perfectly placed.
+                    if (!actnum.empty() && (actnum[cell] == 0)) {
+                        continue;
                     }
+
+                    regions.insert(regionValues[cell]);
                 }
             }
         }
@@ -1520,22 +1574,19 @@ private:
                 continue;
             }
 
+            std::vector<std::string> labels;
+            labels.reserve(regions.size());
+            for (const auto region : regions) {
+                labels.push_back((region == 0)
+                                 ? std::string{"0 (outside every region)"}
+                                 : std::to_string(region));
+            }
+
             offenders.push_back(fmt::format("  {} is completed in flux regions {}",
-                                            name, fmt::join(regions, ", ")));
+                                            name, fmt::join(labels, ", ")));
         }
 
-        if (offenders.empty()) {
-            return;
-        }
-
-        OPM_THROW(std::invalid_argument,
-                  fmt::format("DUMPFLUX requires every well to be completed within a single "
-                              "FLUXNUM region. A reduced run covering one region would see "
-                              "only the part of a straddling well that falls inside it, but "
-                              "would solve that well as though it were whole. Offending "
-                              "wells:\n{}\nEither move the region boundary clear of these "
-                              "completions or keep the wells out of the sector.",
-                              fmt::join(offenders, "\n")));
+        return offenders;
     }
 
     void initializeFluxDumpers_()
@@ -1566,8 +1617,6 @@ private:
         const auto regionValues = fieldProps.get_global_int("FLUXNUM");
         const auto& actnum = fieldProps.actnumRaw();
         const auto dims = state.gridDims().getNXYZ();
-
-        this->checkWellsWithinSingleFluxRegion_(regionValues, dims);
 
         std::vector<std::array<int, 2>> nncConnections;
         this->fluxNncPairToIndex_.clear();
