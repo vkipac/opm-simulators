@@ -45,4 +45,4 @@ if "${run_cmd[@]}" > "$log_file" 2>&1; then
     exit 1
 fi
 
-grep -q "Invalid USEFLUX FLUX-mode volumetric rate" "$log_file"
+grep -q "Invalid USEFLUX FLUX-mode component mass rate" "$log_file"

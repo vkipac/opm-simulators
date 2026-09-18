@@ -185,7 +185,7 @@ int main(int argc, char** argv)
 
         for (const auto& step : data.reportSteps) {
             const auto expectedRateSize = expectFlux ? expectedRates : 0U;
-            if (step.rates.size() != expectedRateSize) {
+            if (step.massRates.size() != expectedRateSize) {
                 return fail("unexpected FLXRATE payload size in " + path);
             }
 
@@ -219,7 +219,7 @@ int main(int argc, char** argv)
                 std::any_of(data.reportSteps.begin(), data.reportSteps.end(),
                             [](const auto& step)
                             {
-                                return std::any_of(step.rates.begin(), step.rates.end(),
+                                return std::any_of(step.massRates.begin(), step.massRates.end(),
                                                    [](const double rate)
                                                    { return rate != 0.0; });
                             });

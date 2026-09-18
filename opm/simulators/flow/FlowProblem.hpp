@@ -1463,7 +1463,9 @@ protected:
         const auto faceCount = static_cast<std::size_t>(fluxData->header.numBoundaryFaces);
         const auto phaseCount = static_cast<std::size_t>(fluxData->header.numPhases);
         const auto expectedSize = faceCount * phaseCount;
-        if (phaseCount == 0 || faceIndex >= faceCount || fluxStep->rates.size() != expectedSize) {
+        if (phaseCount == 0 || faceIndex >= faceCount
+            || fluxStep->massRates.size() != expectedSize)
+        {
             return false;
         }
 
@@ -1471,12 +1473,12 @@ protected:
         const auto base = faceIndex * phaseCount;
         std::size_t phaseSlot = 0;
 
-        // Prefer the mass rates when the producing run supplied them. Imposing
-        // those needs no density, so the mass taken in does not depend on how
-        // the flow was distributed over the producer's time steps, nor on this
-        // run having to guess the density of a cell outside its own grid.
-        isMassRate = (fluxStep->massRates.size() == expectedSize);
-        const auto& storedRates = isMassRate ? fluxStep->massRates : fluxStep->rates;
+        // The file stores component masses, which is the only thing a reduced
+        // run can impose: for flow entering the sector the upstream cell lies
+        // outside its grid, so it has no state with which to turn a phase
+        // volumetric flux into components.
+        isMassRate = true;
+        const auto& storedRates = fluxStep->massRates;
 
         // The stored rates are totals across the face, positive into the
         // sector. The linearizer multiplies the boundary rate vector by the
@@ -2056,12 +2058,12 @@ protected:
                                       & static_cast<int>(EclIO::FluxFile::Mode::Flux)) != 0;
         if (fluxModeEnabled) {
             for (std::size_t stepIdx = 0; stepIdx < fluxData.reportSteps.size(); ++stepIdx) {
-                const auto& rates = fluxData.reportSteps[stepIdx].rates;
-                for (std::size_t rateIdx = 0; rateIdx < rates.size(); ++rateIdx) {
-                    const auto value = rates[rateIdx];
+                const auto& masses = fluxData.reportSteps[stepIdx].massRates;
+                for (std::size_t rateIdx = 0; rateIdx < masses.size(); ++rateIdx) {
+                    const auto value = masses[rateIdx];
                     if (!std::isfinite(value)) {
                         std::ostringstream msg;
-                        msg << "Invalid USEFLUX FLUX-mode volumetric rate in '"
+                        msg << "Invalid USEFLUX FLUX-mode component mass rate in '"
                             << selectedFluxPath.string() << "' at report-step index "
                             << stepIdx << ", rate index " << rateIdx
                             << ": " << value;

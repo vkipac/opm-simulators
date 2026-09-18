@@ -78,7 +78,7 @@ BOOST_AUTO_TEST_CASE(MapsBoundaryFacesFromFluxFileData)
     step.simStep = 0;
     step.startTime = 0.0;
     step.stepLength = 1.0;
-    step.rates = {1.0, 2.0};
+    step.massRates = {1.0, 2.0};
     dumper.appendReportStep(step);
 
     const auto localToActive = Opm::FluxBoundary::buildLocalToActive(regions.front().localToGlobal);
@@ -117,7 +117,7 @@ BOOST_AUTO_TEST_CASE(LoadsFluxFileAndPreservesNncFaces)
     step.simStep = 0;
     step.startTime = 0.0;
     step.stepLength = 1.0;
-    step.rates = {11.0, 99.0};
+    step.massRates = {11.0, 99.0};
     dumper.appendReportStep(step);
 
     const auto outPath = std::filesystem::path{"test_fluxboundary_roundtrip.FLUX"};
@@ -173,7 +173,7 @@ BOOST_AUTO_TEST_CASE(BuildsDirectionalFaceIndexRegistration)
     step.simStep = 0;
     step.startTime = 0.0;
     step.stepLength = 1.0;
-    step.rates = {1.0, 2.0};
+    step.massRates = {1.0, 2.0};
     dumper.appendReportStep(step);
 
     const auto localToActive = Opm::FluxBoundary::buildLocalToActive(regions.front().localToGlobal);

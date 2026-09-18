@@ -80,7 +80,7 @@ bool compareStep(const Opm::EclIO::FluxFile::ReportStep& lhs,
         return false;
     }
 
-    const bool basicMatch = compareVector(lhs.rates, rhs.rates, "rates", 1e-10)
+    const bool basicMatch = compareVector(lhs.massRates, rhs.massRates, "massRates", 1e-10)
         && pressureMatch
         && compareVector(lhs.swat, rhs.swat, "swat", 1e-10)
         && compareVector(lhs.sgas, rhs.sgas, "sgas", 1e-10)

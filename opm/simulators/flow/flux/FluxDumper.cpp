@@ -211,7 +211,7 @@ FluxDumper::ReportStepData FluxDumper::makeZeroFluxStep(const int reportStep,
     step.stepLength = stepLength;
 
     if (hasFluxMode(this->data_.header.mode)) {
-        step.rates.assign(this->expectedRateSize(), 0.0);
+        step.massRates.assign(this->expectedRateSize(), 0.0);
     }
 
     if (hasPressureMode(this->data_.header.mode)) {
@@ -235,7 +235,6 @@ void FluxDumper::appendReportStep(const ReportStepData& stepData)
     step.simStep = stepData.simStep;
     step.startTime = stepData.startTime;
     step.stepLength = stepData.stepLength;
-    step.rates = stepData.rates;
     step.pressures = stepData.pressures;
     step.swat = stepData.swat;
     step.sgas = stepData.sgas;
@@ -362,12 +361,12 @@ void FluxDumper::validateStepData(const ReportStepData& stepData) const
     };
 
     if (hasFluxMode(this->data_.header.mode)) {
-        if (stepData.rates.size() != this->expectedRateSize()) {
-            throwSizeError("rates", this->expectedRateSize(), stepData.rates.size());
+        if (stepData.massRates.size() != this->expectedRateSize()) {
+            throwSizeError("massRates", this->expectedRateSize(), stepData.massRates.size());
         }
     }
-    else if (!stepData.rates.empty()) {
-        throwSizeError("rates", 0, stepData.rates.size());
+    else if (!stepData.massRates.empty()) {
+        throwSizeError("massRates", 0, stepData.massRates.size());
     }
 
     if (hasPressureMode(this->data_.header.mode)) {

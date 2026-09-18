@@ -91,7 +91,7 @@ BOOST_AUTO_TEST_CASE(ValidatesReportStepVectorSizes)
     good.simStep = 3;
     good.startTime = 10.0;
     good.stepLength = 2.0;
-    good.rates = {1.0, 2.0, 3.0};
+    good.massRates = {1.0, 2.0, 3.0};
     good.pressures = {100.0};
     good.swat = {0.2};
     good.sgas = {0.1};
@@ -104,7 +104,7 @@ BOOST_AUTO_TEST_CASE(ValidatesReportStepVectorSizes)
     BOOST_CHECK(dumper.data().header.hasTemperature);
 
     Opm::FluxDumper::ReportStepData bad = good;
-    bad.rates = {1.0, 2.0};
+    bad.massRates = {1.0, 2.0};
     BOOST_CHECK_THROW(dumper.appendReportStep(bad), std::invalid_argument);
 }
 
@@ -182,7 +182,7 @@ BOOST_AUTO_TEST_CASE(ValidatesReportStepVectorSizes)
     step.simStep = 0;
     step.startTime = 0.0;
     step.stepLength = 1.0;
-    step.rates = {12.5};
+    step.massRates = {12.5};
     dumper.appendReportStep(step);
 
     const auto outPath = std::filesystem::path{"test_fluxdumper_roundtrip.FLUX"};
@@ -193,8 +193,8 @@ BOOST_AUTO_TEST_CASE(ValidatesReportStepVectorSizes)
     BOOST_CHECK_EQUAL(loaded.header.numBoundaryFaces, 1);
     BOOST_CHECK_EQUAL(loaded.header.numReportSteps, 1);
     BOOST_REQUIRE_EQUAL(loaded.reportSteps.size(), 1U);
-    BOOST_REQUIRE_EQUAL(loaded.reportSteps[0].rates.size(), 1U);
-    BOOST_CHECK_CLOSE(loaded.reportSteps[0].rates[0], 12.5, 1e-12);
+    BOOST_REQUIRE_EQUAL(loaded.reportSteps[0].massRates.size(), 1U);
+    BOOST_CHECK_CLOSE(loaded.reportSteps[0].massRates[0], 12.5, 1e-12);
 
     std::filesystem::remove(outPath);
   }
@@ -220,7 +220,7 @@ BOOST_AUTO_TEST_CASE(BuildsZeroFluxStepWithExpectedSizes)
   BOOST_CHECK_EQUAL(step.simStep, 8);
   BOOST_CHECK_CLOSE(step.startTime, 12.0, 1e-12);
   BOOST_CHECK_CLOSE(step.stepLength, 3.0, 1e-12);
-  BOOST_CHECK_EQUAL(step.rates.size(), 4U);
+  BOOST_CHECK_EQUAL(step.massRates.size(), 4U);
   BOOST_CHECK_EQUAL(step.pressures.size(), 2U);
   BOOST_CHECK_EQUAL(step.swat.size(), 2U);
   BOOST_CHECK_EQUAL(step.sgas.size(), 2U);

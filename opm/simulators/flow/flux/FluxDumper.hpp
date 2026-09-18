@@ -44,13 +44,15 @@ public:
         double startTime = 0.0;
         double stepLength = 0.0;
 
-        std::vector<double> rates;
         std::vector<double> pressures;
         std::vector<double> swat;
         std::vector<double> sgas;
         std::vector<double> rs;
         std::vector<double> rv;
         std::vector<double> temperature;
+
+        /// Component mass rates across each boundary face, face-major over the
+        /// active phases. The whole of the Flux-mode payload.
         std::vector<double> massRates;
         std::vector<double> relPerm;
         std::vector<double> capPressure;

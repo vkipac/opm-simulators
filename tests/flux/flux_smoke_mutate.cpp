@@ -102,12 +102,12 @@ int main(int argc, char** argv)
         return fail("input file has no report steps");
     }
 
-    if (data.reportSteps.front().rates.empty()) {
+    if (data.reportSteps.front().massRates.empty()) {
         return fail("input file has empty FLXRATE payload");
     }
 
     try {
-        data.reportSteps.front().rates.front() = mutationValue(mutation);
+        data.reportSteps.front().massRates.front() = mutationValue(mutation);
     }
     catch (const std::exception& e) {
         return fail(e.what());

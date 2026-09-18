@@ -130,6 +130,7 @@ list (APPEND MAIN_SOURCE_FILES
   opm/simulators/flow/flux/FluxBoundary.cpp
   opm/simulators/flow/flux/FluxDumper.cpp
   opm/simulators/flow/flux/FluxRegions.cpp
+  opm/simulators/flow/flux/FluxSummaryKeys.cpp
   opm/simulators/flow/flux/ParentSummary.cpp
   opm/simulators/flow/HybridNewtonConfig.cpp
   opm/simulators/flow/InterRegFlows.cpp
@@ -1073,6 +1074,7 @@ list (APPEND PUBLIC_HEADER_FILES
   opm/simulators/flow/OutputCompositionalModule.hpp
   opm/simulators/flow/OutputExtractor.hpp
   opm/simulators/flow/flux/FluxDumper.hpp
+  opm/simulators/flow/flux/FluxSummaryKeys.hpp
   opm/simulators/flow/flux/FluxRegions.hpp
   opm/simulators/flow/flux/FluxActivation.hpp
   opm/simulators/flow/flux/FluxBoundary.hpp

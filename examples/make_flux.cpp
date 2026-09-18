@@ -32,6 +32,7 @@
 #include <opm/io/eclipse/ESmry.hpp>
 #include <opm/simulators/flow/flux/FluxDumper.hpp>
 #include <opm/simulators/flow/flux/FluxRegions.hpp>
+#include <opm/simulators/flow/flux/FluxSummaryKeys.hpp>
 
 #include <algorithm>
 #include <array>
@@ -704,6 +705,69 @@ std::string rateArrayName(const Opm::EclIO::FluxFile::Phase phase,
     throw std::invalid_argument("unsupported face direction for FLUX-mode rate array lookup");
 }
 
+// FLOWS, the component SURFACE VOLUME flux per face, as opposed to FLORES which
+// is the phase RESERVOIR volumetric flux. A FLUX file stores component masses,
+// and those are FLOWS times the reference density, so this is the array family
+// to read. Going the other way, from FLORES, would need the formation volume
+// factors and the Rs/Rv of the upwind cell.
+std::string flowsArrayName(const Opm::EclIO::FluxFile::Phase phase,
+                           const Opm::FaceDir::DirEnum dir)
+{
+    std::string prefix;
+    switch (phase) {
+    case Opm::EclIO::FluxFile::Phase::Oil:
+        prefix = "FLOOIL";
+        break;
+    case Opm::EclIO::FluxFile::Phase::Water:
+        prefix = "FLOWAT";
+        break;
+    case Opm::EclIO::FluxFile::Phase::Gas:
+        prefix = "FLOGAS";
+        break;
+    }
+
+    switch (dir) {
+    case Opm::FaceDir::XPlus:
+        return prefix + "I+";
+    case Opm::FaceDir::XMinus:
+        return prefix + "I-";
+    case Opm::FaceDir::YPlus:
+        return prefix + "J+";
+    case Opm::FaceDir::YMinus:
+        return prefix + "J-";
+    case Opm::FaceDir::ZPlus:
+        return prefix + "K+";
+    case Opm::FaceDir::ZMinus:
+        return prefix + "K-";
+    case Opm::FaceDir::Unknown:
+        break;
+    }
+
+    throw std::invalid_argument("unsupported face direction for FLUX-mode flow array lookup");
+}
+
+std::string nncFlowsArrayName(const Opm::EclIO::FluxFile::Phase phase)
+{
+    switch (phase) {
+    case Opm::EclIO::FluxFile::Phase::Oil:
+        return "FLOOILN+";
+    case Opm::EclIO::FluxFile::Phase::Water:
+        return "FLOWATN+";
+    case Opm::EclIO::FluxFile::Phase::Gas:
+        return "FLOGASN+";
+    }
+
+    throw std::invalid_argument("unsupported phase for NNC FLUX-mode flow array lookup");
+}
+
+// FLOWS are surface volumes, so gas is measured differently from the liquids.
+Opm::UnitSystem::measure surfaceRateMeasure(const Opm::EclIO::FluxFile::Phase phase)
+{
+    return (phase == Opm::EclIO::FluxFile::Phase::Gas)
+        ? Opm::UnitSystem::measure::gas_surface_rate
+        : Opm::UnitSystem::measure::liquid_surface_rate;
+}
+
 std::string nncRateArrayName(const Opm::EclIO::FluxFile::Phase phase)
 {
     switch (phase) {
@@ -1049,15 +1113,68 @@ void fillPressureStepData(Opm::FluxDumper::ReportStepData& step,
     }
 }
 
+// Reference density of one component, in kg/sm3, for the PVT region a cell
+// belongs to.
+//
+// A FLUX file stores component MASSES, and FLOWS gives component SURFACE
+// VOLUMES, so the two differ only by this. Which is the whole reason this tool
+// reads FLOWS rather than FLORES: turning a phase volumetric flux into
+// component masses needs the formation volume factors and the Rs/Rv of the
+// upwind cell, and this tool has no PVT evaluation at all.
+class ReferenceDensities
+{
+public:
+    explicit ReferenceDensities(const Opm::EclipseState& eclState)
+        : pvtnum_(eclState.fieldProps().get_global_int("PVTNUM"))
+    {
+        const auto& densities = eclState.getTableManager().getDensityTable();
+        this->oil_.reserve(densities.size());
+        this->water_.reserve(densities.size());
+        this->gas_.reserve(densities.size());
+
+        for (const auto& record : densities) {
+            this->oil_.push_back(record.oil);
+            this->water_.push_back(record.water);
+            this->gas_.push_back(record.gas);
+        }
+
+        if (this->oil_.empty()) {
+            throw std::invalid_argument("parent deck has no DENSITY table, so component "
+                                        "masses cannot be formed for the FLUX file");
+        }
+    }
+
+    double operator()(const Opm::EclIO::FluxFile::Phase phase, const int globalCell) const
+    {
+        auto region = std::size_t{0};
+        if (const auto cell = static_cast<std::size_t>(globalCell); cell < this->pvtnum_.size()) {
+            region = static_cast<std::size_t>(std::max(this->pvtnum_[cell] - 1, 0));
+        }
+
+        const auto& table = (phase == Opm::EclIO::FluxFile::Phase::Oil)
+            ? this->oil_
+            : ((phase == Opm::EclIO::FluxFile::Phase::Gas) ? this->gas_ : this->water_);
+
+        return table[std::min(region, table.size() - 1)];
+    }
+
+private:
+    std::vector<int> pvtnum_;
+    std::vector<double> oil_;
+    std::vector<double> water_;
+    std::vector<double> gas_;
+};
+
 void fillFluxStepData(Opm::FluxDumper::ReportStepData& step,
                       const Opm::FluxRegions::Region& region,
                       Opm::EclIO::ERst& restart,
                       const int reportStep,
                       const int phaseMask,
                       const std::map<NncKey, int>& nncPairToIndex,
-                      const Opm::UnitSystem& unitSystem)
+                      const Opm::UnitSystem& unitSystem,
+                      const ReferenceDensities& referenceDensity)
 {
-    step.rates.clear();
+    step.massRates.clear();
 
     const std::array phases{
         Opm::EclIO::FluxFile::Phase::Oil,
@@ -1081,6 +1198,12 @@ void fillFluxStepData(Opm::FluxDumper::ReportStepData& step,
                 continue;
             }
 
+            // The reference density is that of the INTERIOR cell, matching what
+            // the live DUMPFLUX path uses, so that a consumer converting back to
+            // surface volumes with its own densities makes the round trip exact.
+            const auto density = referenceDensity(phase, face.interiorGlobalCell);
+            const auto measure = surfaceRateMeasure(phase);
+
             if (face.isNnc) {
                 const auto key = normalizedNncPair(face.interiorGlobalCell, face.exteriorGlobalCell);
                 const auto indexIt = nncPairToIndex.find(key);
@@ -1088,31 +1211,68 @@ void fillFluxStepData(Opm::FluxDumper::ReportStepData& step,
                     throw std::invalid_argument("NNC boundary face not found in parent NNC list");
                 }
 
-                const auto& values = loadArray(nncRateArrayName(phase));
+                const auto& values = loadArray(nncFlowsArrayName(phase));
                 const auto nncIndex = static_cast<std::size_t>(indexIt->second);
                 if (nncIndex >= values.size()) {
-                    throw std::invalid_argument("NNC rate array is smaller than expected for parent NNC list");
+                    throw std::invalid_argument("NNC flow array is smaller than expected for parent NNC list");
                 }
 
-                const auto nncFlux = unitSystem.to_si(Opm::UnitSystem::measure::rate,
-                                                      values[nncIndex]);
-                step.rates.push_back((face.interiorGlobalCell == key.second) ? nncFlux : -nncFlux);
+                const auto nncFlux = unitSystem.to_si(measure, values[nncIndex]) * density;
+                step.massRates.push_back((face.interiorGlobalCell == key.second) ? nncFlux : -nncFlux);
                 continue;
             }
 
-            const auto& values = loadArray(rateArrayName(phase, face.direction));
+            const auto& values = loadArray(flowsArrayName(phase, face.direction));
             const auto interior = static_cast<std::size_t>(face.interiorGlobalCell);
             if (interior >= values.size()) {
-                throw std::invalid_argument("directional FLORES array is smaller than expected for parent grid");
+                throw std::invalid_argument("directional FLOWS array is smaller than expected for parent grid");
             }
 
             // Restart directional face rates use the interior-cell face orientation.
             // FLUX files store positive values into the sector, i.e. opposite sign.
             // The restart arrays are written in the deck's output units while the
             // FLUX payload is SI, so convert here.
-            step.rates.push_back(-unitSystem.to_si(Opm::UnitSystem::measure::rate,
-                                                   values[interior]));
+            step.massRates.push_back(-unitSystem.to_si(measure, values[interior]) * density);
         }
+    }
+}
+
+// Narrow an embedded summary payload down to the vectors a reduced run needs.
+//
+// Keys the parent did not write are dropped rather than faked: a reduced run
+// treats a key it cannot find as absent and falls back on its own evaluation,
+// which is better than handing it a zero. The UDQ fallbacks have already been
+// resolved by this point, so anything still missing really is unavailable.
+void retainSummaryKeys(SummaryPayload& payload, const std::vector<std::string>& wanted)
+{
+    const auto keep = std::unordered_set<std::string>(wanted.begin(), wanted.end());
+
+    std::vector<std::size_t> retained;
+    retained.reserve(payload.keys.size());
+    for (std::size_t i = 0; i < payload.keys.size(); ++i) {
+        if (keep.count(payload.keys[i]) != 0) {
+            retained.push_back(i);
+        }
+    }
+
+    if (retained.size() == payload.keys.size()) {
+        return;
+    }
+
+    std::vector<std::string> keys;
+    keys.reserve(retained.size());
+    for (const auto i : retained) {
+        keys.push_back(payload.keys[i]);
+    }
+    payload.keys = std::move(keys);
+
+    for (auto& stepValues : payload.valuesPerStep) {
+        std::vector<double> values;
+        values.reserve(retained.size());
+        for (const auto i : retained) {
+            values.push_back(stepValues[i]);
+        }
+        stepValues = std::move(values);
     }
 }
 
@@ -1153,6 +1313,7 @@ int run(const Options& opt)
     const auto fluxMode = modeFromString(opt.mode);
     const auto dims = gridDims(state);
     const auto& unitSystem = state.getDeckUnitSystem();
+    const ReferenceDensities referenceDensity(state);
     const auto regionValues = parseMappingSpecification(opt, dims);
 
     // The mapping is given over every cell of the grid, so it also assigns a
@@ -1208,6 +1369,29 @@ int run(const Options& opt)
     if (parentInput.summaryPath) {
         summaryPayload = loadSummaryPayload(*parentInput.summaryPath);
         addMissingSummaryFallbacks(*summaryPayload, requiredFallbacks, substitutions);
+
+        // Keep the same vectors a live DUMPFLUX run would embed rather than
+        // the whole of the parent's summary. Which vectors those are depends on
+        // the deck's UDQ DEFINE expressions and ACTIONX conditions, so the
+        // selection is shared with the simulator instead of being guessed here.
+        //
+        // Only what the parent actually wrote can be kept, though. A live run
+        // evaluates any key it likes from its own SummaryState; this tool has
+        // nothing but the SMSPEC, so a key the parent's SUMMARY section never
+        // asked for is simply not available.
+        const auto& phases = state.runspec().phases();
+        const auto wanted = Opm::fluxSummaryKeys(schedule,
+                                                 phases.active(Opm::Phase::OIL),
+                                                 phases.active(Opm::Phase::WATER),
+                                                 phases.active(Opm::Phase::GAS));
+
+        const auto available = summaryPayload->keys.size();
+        retainSummaryKeys(*summaryPayload, wanted);
+
+        std::cout << "Embedding " << summaryPayload->keys.size() << " of the "
+                  << wanted.size() << " parent summary vectors a reduced run can use ("
+                  << available << " present in the parent summary)\n";
+
         if (summaryPayload->reportTimes.size() == reportSteps.size()) {
             restartStepStartIndex = 0;
         }
@@ -1242,7 +1426,8 @@ int run(const Options& opt)
                              sourceReportStep,
                              phaseMaskValue,
                              nncPairToIndex,
-                             unitSystem);
+                             unitSystem,
+                             referenceDensity);
         }
 
         if (hasPressureMode(fluxMode)) {
@@ -1276,10 +1461,12 @@ int run(const Options& opt)
 
             // Summary samples form their own series; emit one per parent step.
             // Taking every available step means each stored rate is already
-            // the parent's average over that step, which is what the v2 format
+            // the parent's average over that step, which is what the format
             // requires of rate-type entries.
-            dumper.appendSummarySample(currentTime,
-                                       summaryPayload->valuesPerStep[summaryStepIdx]);
+            if (!summaryPayload->keys.empty()) {
+                dumper.appendSummarySample(currentTime,
+                                           summaryPayload->valuesPerStep[summaryStepIdx]);
+            }
 
             previousTime = currentTime;
         }

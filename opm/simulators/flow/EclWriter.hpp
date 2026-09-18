@@ -56,6 +56,7 @@
 #include <opm/simulators/flow/FlowBaseVanguard.hpp>
 #include <opm/simulators/flow/FlowProblemParameters.hpp>
 #include <opm/simulators/flow/flux/FluxDumper.hpp>
+#include <opm/simulators/flow/flux/FluxSummaryKeys.hpp>
 #include <opm/simulators/flow/flux/FluxRegions.hpp>
 #include <opm/simulators/timestepping/SimulatorTimer.hpp>
 #include <opm/simulators/utils/DeferredLoggingErrorHelpers.hpp>
@@ -768,10 +769,6 @@ public:
             return 0.0;
         };
 
-        if (this->fluxRateSnapshots_.size() != this->fluxDumpers_.size()) {
-            this->fluxRateSnapshots_.assign(this->fluxDumpers_.size(), {});
-        }
-
         if (this->fluxMassSnapshots_.size() != this->fluxDumpers_.size()) {
             this->fluxMassSnapshots_.assign(this->fluxDumpers_.size(), {});
         }
@@ -815,14 +812,6 @@ public:
         };
 
         for (std::size_t i = 0; i < this->fluxDumpers_.size(); ++i) {
-            this->fluxRateSnapshots_[i].push_back(
-                this->fluxDumpers_[i].makeFaceMajorRates(
-                    [&orientedFaceValue, &floresValue](const FluxRegions::BoundaryFace& face,
-                                                       const EclIO::FluxFile::Phase phase)
-                    {
-                        return orientedFaceValue(floresValue, face, phase);
-                    }));
-
             // Convert to COMPONENT mass rates here, where the state of the cell
             // the flow actually comes from is known.
             auto massSnapshot = this->fluxDumpers_[i].makeFaceMajorRates(
@@ -1784,53 +1773,69 @@ private:
 
         this->fluxCapturedFaceRates_.reserve(this->fluxDumpers_.size());
         for (const auto& dumper : this->fluxDumpers_) {
+            // The phase volumetric flux across one boundary face, oriented
+            // positive into the sector.
+            const auto phaseFlux = [&flows, this](const FluxRegions::BoundaryFace& face,
+                                                  const EclIO::FluxFile::Phase phase)
+            {
+                if (face.isNnc || face.direction == FaceDir::Unknown) {
+                    return 0.0;
+                }
+
+                const auto comp = this->fluxComponentIndex_(phase);
+
+                // FLORES is stored per cell for the positive face
+                // directions only, and is oriented along the positive
+                // axis. The FLUX file convention is positive into the
+                // sector.
+                //
+                // For a boundary face on a positive direction the
+                // interior cell holds the value and the orientation has
+                // to be flipped. For a boundary face on a negative
+                // direction the value lives on the exterior cell's
+                // positive face and already points into the sector.
+                switch (face.direction) {
+                case FaceDir::XPlus:
+                case FaceDir::YPlus:
+                case FaceDir::ZPlus:
+                    return -flows.getFloresIfAvailable(face.interiorGlobalCell,
+                                                       face.direction,
+                                                       comp);
+
+                case FaceDir::XMinus:
+                    return flows.getFloresIfAvailable(face.exteriorGlobalCell,
+                                                      FaceDir::XPlus,
+                                                      comp);
+
+                case FaceDir::YMinus:
+                    return flows.getFloresIfAvailable(face.exteriorGlobalCell,
+                                                      FaceDir::YPlus,
+                                                      comp);
+
+                case FaceDir::ZMinus:
+                    return flows.getFloresIfAvailable(face.exteriorGlobalCell,
+                                                      FaceDir::ZPlus,
+                                                      comp);
+
+                default:
+                    return 0.0;
+                }
+            };
+
+            // Converted to component masses here for the same reason the
+            // per-time-step path does it: only this side of the boundary knows
+            // the state of the cell an inflowing stream comes from.
             this->fluxCapturedFaceRates_.push_back(
                 dumper.makeFaceMajorRates(
-                    [&flows, this](const FluxRegions::BoundaryFace& face,
-                                   const EclIO::FluxFile::Phase phase)
+                    [&phaseFlux, this](const FluxRegions::BoundaryFace& face,
+                                       const EclIO::FluxFile::Phase component)
                     {
-                        if (face.isNnc || face.direction == FaceDir::Unknown) {
-                            return 0.0;
-                        }
-
-                        const auto comp = this->fluxComponentIndex_(phase);
-
-                        // FLORES is stored per cell for the positive face
-                        // directions only, and is oriented along the positive
-                        // axis. The FLUX file convention is positive into the
-                        // sector.
-                        //
-                        // For a boundary face on a positive direction the
-                        // interior cell holds the value and the orientation has
-                        // to be flipped. For a boundary face on a negative
-                        // direction the value lives on the exterior cell's
-                        // positive face and already points into the sector.
-                        switch (face.direction) {
-                        case FaceDir::XPlus:
-                        case FaceDir::YPlus:
-                        case FaceDir::ZPlus:
-                            return -flows.getFloresIfAvailable(face.interiorGlobalCell,
-                                                               face.direction,
-                                                               comp);
-
-                        case FaceDir::XMinus:
-                            return flows.getFloresIfAvailable(face.exteriorGlobalCell,
-                                                              FaceDir::XPlus,
-                                                              comp);
-
-                        case FaceDir::YMinus:
-                            return flows.getFloresIfAvailable(face.exteriorGlobalCell,
-                                                              FaceDir::YPlus,
-                                                              comp);
-
-                        case FaceDir::ZMinus:
-                            return flows.getFloresIfAvailable(face.exteriorGlobalCell,
-                                                              FaceDir::ZPlus,
-                                                              comp);
-
-                        default:
-                            return 0.0;
-                        }
+                        return this->fluxComponentMass_(
+                            face, component,
+                            [&phaseFlux, &face](const EclIO::FluxFile::Phase p)
+                            {
+                                return phaseFlux(face, p);
+                            });
                     }));
         }
     }
@@ -2088,7 +2093,7 @@ private:
 
         const bool haveAggregatedRates =
             !this->fluxRateTimeWeights_.empty()
-            && this->fluxRateSnapshots_.size() == this->fluxDumpers_.size();
+            && this->fluxMassSnapshots_.size() == this->fluxDumpers_.size();
 
         for (std::size_t dumperIdx = 0; dumperIdx < this->fluxDumpers_.size(); ++dumperIdx) {
             auto& dumper = this->fluxDumpers_[dumperIdx];
@@ -2100,16 +2105,9 @@ private:
 
             if (haveAggregatedRates) {
                 // Time-weighted average over the time steps that make up this
-                // record's window, so that a consumer holding the value
-                // constant across the window reproduces the flow over it.
-                step.rates = FluxDumper::aggregateRates(EclIO::FluxFile::Sampling::Averaged,
-                                                        this->fluxRateSnapshots_[dumperIdx],
-                                                        this->fluxRateTimeWeights_);
-
-                // Same treatment for the mass flux, so that the value a
-                // consumer holds across the window is the mass actually
-                // transferred over it, independent of how the window was
-                // subdivided.
+                // record's window, so that the value a consumer holds across
+                // the window is the mass actually transferred over it,
+                // independent of how the window was subdivided.
                 if (this->fluxMassUsable_
                     && (dumperIdx < this->fluxMassSnapshots_.size())
                     && (this->fluxMassSnapshots_[dumperIdx].size()
@@ -2124,7 +2122,7 @@ private:
             else if (haveCapturedRates) {
                 // Cartesian contributions were sampled before the FLORES buffers
                 // were moved into the restart solution.
-                step.rates = this->fluxCapturedFaceRates_[dumperIdx];
+                step.massRates = this->fluxCapturedFaceRates_[dumperIdx];
             }
 
             if (haveAggregatedRates || haveCapturedRates) {
@@ -2159,14 +2157,9 @@ private:
                             : -nncFlux;
                     });
 
-                for (std::size_t i = 0; i < step.rates.size(); ++i) {
-                    step.rates[i] += nncRates[i];
-                }
-
-                // The same contribution in component masses. A FLUX-mode
-                // consumer prefers the mass record over the volumetric one, so
-                // adding the NNC faces to the rates alone would let everything
-                // crossing them disappear from the boundary.
+                // NNC faces carry a phase volumetric flux like any other, so it
+                // goes through the same upwind and Rs/Rv treatment before being
+                // added to the masses.
                 if (this->fluxMassUsable_
                     && (step.massRates.size() == nncRates.size()))
                 {
@@ -2280,9 +2273,6 @@ private:
         }
 
         // Start a fresh accumulation window for the next record.
-        for (auto& snapshots : this->fluxRateSnapshots_) {
-            snapshots.clear();
-        }
         for (auto& snapshots : this->fluxMassSnapshots_) {
             snapshots.clear();
         }
@@ -2309,85 +2299,10 @@ private:
     {
         const auto& schedule = this->simulator_.vanguard().schedule();
 
-        auto keywords = std::unordered_set<std::string>{};
-
-        const auto addAll = [&keywords](std::initializer_list<const char*> names)
-        {
-            for (const auto* name : names) {
-                keywords.insert(name);
-            }
-        };
-
-        // Surface rates and cumulatives for the conserved quantities of every
-        // active phase. A USEFLUX run needs these to reconstruct the
-        // contribution of wells that fall outside the sector.
-        if (FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)) {
-            addAll({"WOPR", "WOPT", "WOIR", "WOIT"});
-        }
-        if (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)) {
-            addAll({"WWPR", "WWPT", "WWIR", "WWIT"});
-        }
-        if (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
-            addAll({"WGPR", "WGPT", "WGIR", "WGIT"});
-        }
-
-        // Reservoir volume rates and cumulatives.
-        addAll({"WVPR", "WVPT", "WVIR", "WVIT"});
-
-        // Everything referenced by the deck's UDQ DEFINE expressions and by
-        // ACTIONX conditions, so that both can be evaluated through the
-        // standard code paths in the reduced run.
-        for (const auto& udq : schedule.template unique<UDQConfig>()) {
-            udq.second.required_summary(keywords);
-        }
-
-        for (const auto& action : schedule.back().actions.get()) {
-            action.required_summary(keywords);
-        }
-
-        // required_summary() yields bare keywords, so expand the well and
-        // group level ones over the objects they can apply to.
-        const auto& wells = schedule.wellNames();
-        const auto& groups = schedule.groupNames();
-
-        auto keys = std::vector<std::string>{};
-        keys.reserve(keywords.size());
-
-        for (const auto& keyword : keywords) {
-            if (keyword.empty()) {
-                continue;
-            }
-
-            switch (EclIO::SummaryNode::category_from_keyword(keyword)) {
-            case EclIO::SummaryNode::Category::Well:
-                for (const auto& well : wells) {
-                    keys.push_back(keyword + ':' + well);
-                }
-                break;
-
-            case EclIO::SummaryNode::Category::Group:
-                for (const auto& group : groups) {
-                    keys.push_back(keyword + ':' + group);
-                }
-                break;
-
-            case EclIO::SummaryNode::Category::Field:
-            case EclIO::SummaryNode::Category::Miscellaneous:
-                keys.push_back(keyword);
-                break;
-
-            default:
-                // Region, block, connection, segment, aquifer and node level
-                // quantities are evaluated locally by the reduced run and are
-                // not expandable without further context.
-                break;
-            }
-        }
-
-        std::sort(keys.begin(), keys.end());
-        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
-
-        return keys;
+        return Opm::fluxSummaryKeys(schedule,
+                                    FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx),
+                                    FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx),
+                                    FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx));
     }
 
     std::vector<double> fluxSummaryValues_(const std::vector<std::string>& keys) const
@@ -2537,7 +2452,6 @@ private:
     std::vector<std::string> fluxOutputPaths_;
     std::map<std::pair<int, int>, int> fluxNncPairToIndex_;
     std::vector<std::vector<double>> fluxCapturedFaceRates_;
-    std::vector<std::vector<std::vector<double>>> fluxRateSnapshots_;
     std::vector<std::vector<std::vector<double>>> fluxMassSnapshots_;
     std::vector<double> fluxRateTimeWeights_;
     std::vector<std::string> fluxSummaryKeyList_;
