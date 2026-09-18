@@ -299,6 +299,24 @@ allocate(const std::size_t bufferSize,
             rstKeywords["FLORES-"] = 0;
         }
     }
+    else if (anyFlores_ && (numOutputNnc > 0)) {
+        // A sector boundary can run along an NNC, and a DUMPFLUX run then needs
+        // the flux across it even though no restart output of FLORES was asked
+        // for. The Cartesian directions are served from the linearizer's own
+        // per-cell buffers, but the NNC values exist only here, so without this
+        // everything crossing such a face would be silently lost.
+        const auto rstName = std::array{ "FLRGASN+", "FLROILN+", "FLRWATN+" };
+
+        for (unsigned ii = 0; ii < phaseIdxs.size(); ++ii) {
+            if (FluidSystem::phaseIsActive(phaseIdxs[ii])) {
+                enableFloresn_ = true;
+
+                floresn_[compIdxs[ii]].name = rstName[ii];
+                floresn_[compIdxs[ii]].indices.resize(numOutputNnc, -1);
+                floresn_[compIdxs[ii]].values.resize(numOutputNnc, 0.0);
+            }
+        }
+    }
 }
 
 template<class FluidSystem>
