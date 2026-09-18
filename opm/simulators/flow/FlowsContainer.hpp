@@ -55,12 +55,13 @@ class FlowsContainer
     static constexpr auto waterCompIdx = FluidSystem::waterCompIdx;
 
 public:
-    //! \param forceFlores Compute the inter-cell flows even when no RPTRST
-    //!   requests FLORES. A DUMPFLUX run needs them for its boundary rates.
+    //! \param forceFlowsAndFlores Compute the inter-cell flows even when no
+    //!   RPTRST requests them. A DUMPFLUX run needs FLORES for its boundary
+    //!   rates and FLOWS to express them as component masses.
     FlowsContainer(const Schedule& schedule,
                    const SummaryConfig& summaryConfig,
                    std::function<bool(const int)> ,
-                   bool forceFlores = false);
+                   bool forceFlowsAndFlores = false);
 
     void allocate(const std::size_t bufferSize,
                   const SummaryConfig& summaryConfig,

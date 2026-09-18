@@ -88,7 +88,7 @@ FlowsContainer<FluidSystem>::
 FlowsContainer(const Schedule& schedule,
                const SummaryConfig& summaryConfig,
                std::function<bool(const int)> isInterior,
-               const bool forceFlores)
+               const bool forceFlowsAndFlores)
 {
     using namespace std::string_literals;
     using Dir = FaceDir::DirEnum;
@@ -109,14 +109,15 @@ FlowsContainer(const Schedule& schedule,
     enableFlows_ = false;
     enableFlowsn_ = false;
 
-    anyFlores_ = forceFlores ||
+    anyFlores_ = forceFlowsAndFlores ||
                  std::ranges::any_of(schedule,
                                      [](const auto& block)
                                      {
                                          const auto& rstkw = block.rst_config().keywords;
                                          return rstkw.find("FLORES") != rstkw.end();
                                      });
-    anyFlows_ = std::ranges::any_of(schedule,
+    anyFlows_ = forceFlowsAndFlores ||
+                std::ranges::any_of(schedule,
                                     [](const auto& block)
                                     {
                                         const auto& rstkw = block.rst_config().keywords;

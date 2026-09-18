@@ -653,6 +653,46 @@ public:
         }
     }
 
+    //! \brief Warn once if the boundary component masses disagree with the
+    //!        residual the simulator assembled for the same faces.
+    void reportFluxMassMismatch_(const std::vector<double>& written,
+                                 const std::vector<double>& reference)
+    {
+        if (written.size() != reference.size()) {
+            return;
+        }
+
+        if (this->fluxMassMismatchReported_) {
+            return;
+        }
+
+        double worst = 0.0;
+        double scale = 0.0;
+        for (std::size_t i = 0; i < written.size(); ++i) {
+            worst = std::max(worst, std::abs(written[i] - reference[i]));
+            scale = std::max(scale, std::abs(reference[i]));
+        }
+
+        if (!(scale > 0.0)) {
+            return;
+        }
+
+        this->fluxMassMismatchReported_ = true;
+
+        if (worst > 1.0e-8 * scale) {
+            OpmLog::warning(fmt::format("DUMPFLUX: boundary component masses differ from the "
+                                        "assembled residual by up to {:.6e} against a largest "
+                                        "value of {:.6e}, a relative {:.3e}. The stored rates "
+                                        "do not describe what was transported.",
+                                        worst, scale, worst / scale));
+        }
+        else {
+            OpmLog::note(fmt::format("DUMPFLUX: boundary component masses agree with the "
+                                     "assembled residual to a relative {:.3e}.",
+                                     worst / scale));
+        }
+    }
+
     //! \brief Sample the DUMPFLUX boundary rates for the time step that just finished.
     //! \details The FLUX payload is declared as averaged over a report step. The
     //!          values are taken straight from the linearizer, which holds the
@@ -673,6 +713,8 @@ public:
             return;
         }
 
+        const auto& flowsInfo = this->simulator_.problem().model().linearizer().getFlowsInfo();
+
         const auto& vanguard = this->simulator_.vanguard();
 
         auto floresValue = [&floresInfo, &vanguard](const int globalCell,
@@ -688,6 +730,31 @@ public:
 
             const auto faceId = FaceDir::ToIntersectionIndex(dir);
             for (const auto& info : floresInfo[cell]) {
+                if (info.faceId == faceId) {
+                    return info.flow[eqIdx];
+                }
+            }
+
+            return 0.0;
+        };
+
+        // The component surface-volume flux the simulator actually put into the
+        // residual for this face, i.e. the quantity the boundary rate has to
+        // reproduce. FLORES carries the phase volumetric flux, FLOWS the
+        // component flux after the Rs/Rv split.
+        auto flowsValue = [&flowsInfo, &vanguard](const int globalCell,
+                                                  const FaceDir::DirEnum dir,
+                                                  const int eqIdx) -> double
+        {
+            const auto cell = vanguard.compressedIndex(globalCell);
+            if (cell < 0
+                || static_cast<std::size_t>(cell) >= static_cast<std::size_t>(flowsInfo.size()))
+            {
+                return 0.0;
+            }
+
+            const auto faceId = FaceDir::ToIntersectionIndex(dir);
+            for (const auto& info : flowsInfo[cell]) {
                 if (info.faceId == faceId) {
                     return info.flow[eqIdx];
                 }
@@ -887,6 +954,36 @@ public:
                             [](const double v) { return v != 0.0; }))
             {
                 this->fluxMassUsable_ = true;
+            }
+
+            // The same quantity read straight out of the residual, where the
+            // simulator has already done the Rs/Rv split. Any disagreement
+            // means the reconstruction above does not describe what was
+            // actually transported.
+            if (!flowsInfo.empty()) {
+                auto reference = this->fluxDumpers_[i].makeFaceMajorRates(
+                    [&orientedFaceValue, &flowsValue, &vanguard, this]
+                    (const FluxRegions::BoundaryFace& face, const EclIO::FluxFile::Phase component)
+                    {
+                        const auto interiorCell = vanguard.compressedIndex(face.interiorGlobalCell);
+                        if (interiorCell < 0) {
+                            return 0.0;
+                        }
+
+                        const auto pvtRegionIdx = static_cast<unsigned>(
+                            this->simulator_.problem().pvtRegionIndex(interiorCell));
+
+                        const auto phaseIdx = (component == EclIO::FluxFile::Phase::Oil)
+                            ? FluidSystem::oilPhaseIdx
+                            : ((component == EclIO::FluxFile::Phase::Gas)
+                               ? FluidSystem::gasPhaseIdx
+                               : FluidSystem::waterPhaseIdx);
+
+                        return orientedFaceValue(flowsValue, face, component)
+                            * FluidSystem::referenceDensity(phaseIdx, pvtRegionIdx);
+                    });
+
+                this->reportFluxMassMismatch_(massSnapshot, reference);
             }
 
             this->fluxMassSnapshots_[i].push_back(std::move(massSnapshot));
@@ -2273,6 +2370,10 @@ private:
     bool fluxBoundaryReportStepsOnly_ = false;
     bool fluxMassUsable_ = false;
     bool fluxMissingFloresReported_ = false;
+
+    //! \brief Set once the boundary component masses have been reported as
+    //!        disagreeing with the assembled residual.
+    bool fluxMassMismatchReported_ = false;
     bool fluxTransmissibilitiesAssigned_ = false;
 };
 
