@@ -186,7 +186,7 @@ BOOST_AUTO_TEST_CASE(ValidatesReportStepVectorSizes)
     dumper.appendReportStep(step);
 
     const auto outPath = std::filesystem::path{"test_fluxdumper_roundtrip.FLUX"};
-    dumper.write(outPath.string(), false);
+    dumper.flush(outPath.string(), false);
 
     const auto loaded = Opm::EclIO::FluxFile::read(outPath.string());
     BOOST_CHECK_EQUAL(loaded.header.parentNx, 2);
@@ -261,7 +261,7 @@ BOOST_AUTO_TEST_CASE(WritesAndReadsEmbeddedSummaryValues)
   dumper.appendSummarySample(1.00, {5.0, 6.0});
 
   const auto outPath = std::filesystem::path{"test_fluxdumper_summary_roundtrip.FLUX"};
-  dumper.write(outPath.string(), false);
+  dumper.flush(outPath.string(), false);
 
   const auto loaded = Opm::EclIO::FluxFile::read(outPath.string());
   BOOST_REQUIRE_EQUAL(loaded.summaryKeys.size(), 2U);

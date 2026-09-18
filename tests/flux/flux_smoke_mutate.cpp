@@ -36,6 +36,16 @@ bool hasFluxMode(const Opm::EclIO::FluxFile::Mode mode)
     return (static_cast<int>(mode) & static_cast<int>(Opm::EclIO::FluxFile::Mode::Flux)) != 0;
 }
 
+// A FLUX file is only ever produced by appending, so even a caller that holds
+// the whole thing in hand goes through the writer.
+void writeAll(const std::string& path, const Opm::EclIO::FluxFile::Data& data)
+{
+    Opm::EclIO::FluxFile::Writer writer(path, /*formatted=*/false, data);
+    writer.appendRecords(data.reportSteps);
+    writer.appendSummarySamples(data.summarySamples);
+    writer.close();
+}
+
 double mutationValue(const std::string& mutation)
 {
     if (mutation == "nan") {
@@ -80,7 +90,7 @@ int main(int argc, char** argv)
         data.header.summaryPerTimestep = false;
         data.header.summaryMinSampleInterval = 0.0;
 
-        Opm::EclIO::FluxFile::write(outputPath, /*formatted=*/false, data);
+        writeAll(outputPath, data);
         return EXIT_SUCCESS;
     }
 
@@ -103,6 +113,6 @@ int main(int argc, char** argv)
         return fail(e.what());
     }
 
-    Opm::EclIO::FluxFile::write(outputPath, /*formatted=*/false, data);
+    writeAll(outputPath, data);
     return EXIT_SUCCESS;
 }

@@ -25,6 +25,8 @@
 
 #include <array>
 #include <functional>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -78,7 +80,15 @@ public:
                                     double stepLength) const;
 
     void appendReportStep(const ReportStepData& stepData);
-    void write(const std::string& filename, bool formatted = false) const;
+
+    /// Append everything buffered since the last call to the FLUX file.
+    ///
+    /// The file grows by one block per call rather than being rewritten, so
+    /// this is cheap to do often and nothing accumulates in memory between
+    /// calls. The first call also lays down the static section, so the summary
+    /// keys and the sample intervals must be set before it.
+    void flush(const std::string& filename, bool formatted = false);
+
     void setSummaryKeys(std::vector<std::string> summaryKeys);
 
     /// Append one snapshot of the parent summary vectors.
@@ -118,6 +128,20 @@ private:
     std::vector<FluxRegions::BoundaryFace> regionBoundaryFaces_;
 
     EclIO::FluxFile::Data data_;
+
+    /// Records and samples waiting to go into the next block. Cleared by
+    /// flush(), so the run does not carry its whole history around.
+    std::vector<EclIO::FluxFile::ReportStep> pendingRecords_;
+    std::vector<EclIO::FluxFile::SummarySample> pendingSamples_;
+
+    /// Created on the first flush, once the summary keys and intervals are
+    /// settled, and kept so that later flushes append rather than truncate.
+    std::unique_ptr<EclIO::FluxFile::Writer> writer_;
+
+    /// Report step of the record appended last. Two records sharing one is what
+    /// sub-report-step boundary output looks like; the accumulated series used
+    /// to be inspected for this, but it no longer survives a flush.
+    std::optional<int> lastReportStep_;
 };
 
 } // namespace Opm

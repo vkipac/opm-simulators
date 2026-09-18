@@ -2290,18 +2290,18 @@ private:
         this->fluxBoundaryWindowStart_ = endTime;
         this->fluxBoundaryHasRecord_ = true;
 
-        // The whole file is rewritten on every write, so only do so at report
-        // step boundaries rather than for every throttled record.
+        // Each write appends one block rather than rewriting the file, so this
+        // costs the same whether it happens often or rarely. Kept at report
+        // step boundaries so a consumer never sees a half-written window.
         if (!isSubStep) {
-            this->writeFluxDumpers_();
+            this->flushFluxDumpers_();
         }
     }
 
-    void writeFluxDumpers_() const
+    void flushFluxDumpers_()
     {
         for (std::size_t i = 0; i < this->fluxDumpers_.size(); ++i) {
-            const auto& path = this->fluxOutputPaths_[i];
-            this->fluxDumpers_[i].write(path, /*formatted=*/false);
+            this->fluxDumpers_[i].flush(this->fluxOutputPaths_[i], /*formatted=*/false);
         }
     }
 

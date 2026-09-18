@@ -121,7 +121,7 @@ BOOST_AUTO_TEST_CASE(LoadsFluxFileAndPreservesNncFaces)
     dumper.appendReportStep(step);
 
     const auto outPath = std::filesystem::path{"test_fluxboundary_roundtrip.FLUX"};
-    dumper.write(outPath.string(), false);
+    dumper.flush(outPath.string(), false);
 
     const auto localToActive = Opm::FluxBoundary::buildLocalToActive(regions.front().localToGlobal);
     const auto boundary = Opm::FluxBoundary::load(outPath.string(), localToActive);

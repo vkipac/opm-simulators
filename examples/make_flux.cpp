@@ -1287,7 +1287,7 @@ int run(const Options& opt)
         dumper.appendReportStep(step);
     }
 
-    dumper.write(opt.output, /*formatted=*/false);
+    dumper.flush(opt.output, /*formatted=*/false);
 
     std::cout << "Wrote " << opt.mode << "-mode FLUX file '" << opt.output << "' with "
               << region.boundaryFaces.size() << " boundary faces and "

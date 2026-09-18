@@ -247,59 +247,40 @@ void FluxDumper::appendReportStep(const ReportStepData& stepData)
     step.capPressure = stepData.capPressure;
     step.externalRegionSums = stepData.externalRegionSums;
 
-    // Each of these is stored as one flat array, so a quantity has to be
-    // present on every record or on none. The first record is emitted before
-    // anything has been sampled, so back-fill it rather than dropping the whole
-    // series.
-    const auto faceMajorWidth = static_cast<std::size_t>(this->data_.header.numBoundaryFaces)
-                              * static_cast<std::size_t>(this->data_.header.numPhases);
-
-    const auto backFill = [this, faceMajorWidth]
-        (std::vector<double> EclIO::FluxFile::ReportStep::* member,
-         std::vector<double>& incoming)
-    {
-        const auto anyPresent = !incoming.empty()
-            || std::any_of(this->data_.reportSteps.begin(), this->data_.reportSteps.end(),
-                           [member](const auto& existing) { return !(existing.*member).empty(); });
-
-        if (!anyPresent) {
-            return;
-        }
-
-        if (incoming.empty()) {
-            incoming.assign(faceMajorWidth, 0.0);
-        }
-
-        for (auto& existing : this->data_.reportSteps) {
-            if ((existing.*member).empty()) {
-                (existing.*member).assign(faceMajorWidth, 0.0);
-            }
-        }
-    };
-
-    backFill(&EclIO::FluxFile::ReportStep::massRates, step.massRates);
-    backFill(&EclIO::FluxFile::ReportStep::relPerm, step.relPerm);
-    backFill(&EclIO::FluxFile::ReportStep::capPressure, step.capPressure);
-
     if (!step.temperature.empty()) {
         this->data_.header.hasTemperature = true;
     }
 
     // Several records sharing a report step means the boundary data was
     // written at sub-report-step resolution.
-    if (!this->data_.reportSteps.empty()
-        && (this->data_.reportSteps.back().reportStep == step.reportStep))
+    if (this->lastReportStep_.has_value()
+        && (*this->lastReportStep_ == step.reportStep))
     {
         this->data_.header.boundaryPerTimestep = true;
     }
+    this->lastReportStep_ = step.reportStep;
 
-    this->data_.reportSteps.push_back(std::move(step));
-    this->data_.header.numReportSteps = static_cast<int>(this->data_.reportSteps.size());
+    this->pendingRecords_.push_back(std::move(step));
+    this->data_.header.numReportSteps =
+        static_cast<int>(this->data_.header.numReportSteps + 1);
 }
 
-void FluxDumper::write(const std::string& filename, const bool formatted) const
+void FluxDumper::flush(const std::string& filename, const bool formatted)
 {
-    EclIO::FluxFile::write(filename, formatted, this->data_);
+    if (this->writer_ == nullptr) {
+        // Deferred to here rather than done in the constructor because the
+        // summary keys and the sample intervals are set afterwards, and the
+        // static section carries them.
+        this->writer_ = std::make_unique<EclIO::FluxFile::Writer>(filename, formatted,
+                                                                  this->data_);
+    }
+
+    this->writer_->appendRecords(this->pendingRecords_);
+    this->writer_->appendSummarySamples(this->pendingSamples_);
+    this->writer_->close();
+
+    this->pendingRecords_.clear();
+    this->pendingSamples_.clear();
 }
 
 void FluxDumper::setSummaryKeys(std::vector<std::string> summaryKeys)
@@ -316,12 +297,12 @@ void FluxDumper::appendSummarySample(const double time, std::vector<double> valu
                               this->data_.summaryKeys.size(), values.size()));
     }
 
-    auto& sample = this->data_.summarySamples.emplace_back();
+    auto& sample = this->pendingSamples_.emplace_back();
     sample.time = time;
     sample.values = std::move(values);
 
     this->data_.header.numSummarySamples =
-        static_cast<int>(this->data_.summarySamples.size());
+        static_cast<int>(this->data_.header.numSummarySamples + 1);
     this->data_.header.summaryPerTimestep = true;
 }
 
