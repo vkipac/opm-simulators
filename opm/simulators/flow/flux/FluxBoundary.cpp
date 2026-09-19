@@ -249,6 +249,32 @@ std::array<std::vector<int>, 6> FluxBoundary::buildDirectionalFaceIndices(const 
     return directionalFaceIndices;
 }
 
+std::vector<std::vector<int>>
+FluxBoundary::buildNncFaceIndices(const std::size_t numActiveCells) const
+{
+    std::vector<std::vector<int>> nncFaceIndices(numActiveCells);
+
+    for (std::size_t faceIndex = 0; faceIndex < this->faces_.size(); ++faceIndex) {
+        const auto& face = this->faces_[faceIndex];
+        if (!face.isNnc && (face.direction != FaceDir::Unknown)) {
+            continue;
+        }
+
+        if (face.interiorActiveCell < 0
+            || static_cast<std::size_t>(face.interiorActiveCell) >= numActiveCells)
+        {
+            OPM_THROW(std::invalid_argument,
+                      "FluxBoundary: face references invalid active cell for NNC mapping");
+        }
+
+        // Unlike the directional faces these are not unique per cell: a cell
+        // can sit at the end of several non-neighbour connections.
+        nncFaceIndices[face.interiorActiveCell].push_back(static_cast<int>(faceIndex));
+    }
+
+    return nncFaceIndices;
+}
+
 const FluxBoundary::Face* FluxBoundary::faceFromSlot(const int slot) const
 {
     if (slot <= 0) {

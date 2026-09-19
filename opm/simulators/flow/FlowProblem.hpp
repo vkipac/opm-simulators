@@ -1526,6 +1526,24 @@ protected:
         return dirData[globalSpaceIdx];
     }
 
+    //! \brief Sector-boundary faces reaching this cell through a non-neighbour
+    //!   connection.
+    //!
+    //! \details Empty for all but a handful of cells, and empty everywhere when
+    //!   the sector boundary follows the grid axes. What crosses one of these
+    //!   has to enter as a source, because the reduced run has no such
+    //!   connection of its own to carry it.
+    const std::vector<int>& fluxNncFacesAt_(const unsigned int globalSpaceIdx) const
+    {
+        static const std::vector<int> none{};
+
+        if (globalSpaceIdx >= this->fluxNncFaceIndex_.size()) {
+            return none;
+        }
+
+        return this->fluxNncFaceIndex_[globalSpaceIdx];
+    }
+
     const FluxBoundary::Face* fluxBoundaryFace_(const unsigned int globalSpaceIdx,
                                                 const FaceDir::DirEnum dir) const
     {
@@ -2079,6 +2097,7 @@ protected:
         const auto numElems = this->simulator().vanguard().gridView().size(/*codim=*/0);
         this->fluxBoundaryFaceIndex_.resize(numElems, 0);
         this->fluxBoundaryFaceIndex_.data = fluxBoundary.buildDirectionalFaceIndices(numElems);
+        this->fluxNncFaceIndex_ = fluxBoundary.buildNncFaceIndices(numElems);
         this->fluxBoundary_ = std::make_shared<FluxBoundary>(std::move(fluxBoundary));
         this->collectFluxBoundaryFaceAreas_(numElems);
         this->applyFluxBoundaryTransmissibilityOverrides_();
@@ -2431,6 +2450,9 @@ protected:
 
     BCData<int> bcindex_;
     BCData<int> fluxBoundaryFaceIndex_;
+
+    //! \brief Sector-boundary NNC faces per interior cell, indexed by active cell.
+    std::vector<std::vector<int>> fluxNncFaceIndex_;
     BCData<Scalar> fluxBoundaryFaceArea_;
     std::shared_ptr<FluxBoundary> fluxBoundary_;
     std::shared_ptr<ParentSummary> fluxParentSummaryData_;

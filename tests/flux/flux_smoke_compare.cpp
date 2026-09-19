@@ -173,7 +173,7 @@ int main(int argc, char** argv)
         return fail("name metadata mismatch");
     }
     if (expected.localToGlobal != actual.localToGlobal) {
-        return fail("LOCGLOB mismatch");
+        return fail("LOC2GLOB mismatch");
     }
     const bool compareSummary = !expected.summaryKeys.empty();
     if (compareSummary && expected.summaryKeys != actual.summaryKeys) {

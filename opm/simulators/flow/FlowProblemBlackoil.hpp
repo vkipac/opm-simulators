@@ -957,6 +957,8 @@ public:
     {
         this->aquiferModel_.addToSource(rate, globalDofIdx, timeIdx);
 
+        this->addFluxNncSource_(rate, globalDofIdx);
+
         // Add source term from deck
         const auto& source = this->simulator().vanguard().schedule()[this->episodeIndex()].source();
         std::array<int,3> ijk;
@@ -1538,6 +1540,93 @@ public:
     }
 
 private:
+    //! \brief Add what crosses the sector boundary through a non-neighbour
+    //!   connection as a source in the interior cell.
+    //!
+    //! \details The ordinary boundary faces are applied through the grid face
+    //!   they sit on. An NNC has no such face here: the cell on the far side is
+    //!   outside the sector and so absent from this grid, and the connection
+    //!   went with it. Left alone, everything the parent run recorded across
+    //!   one of these would simply vanish.
+    //!
+    //!   The file stores a total component mass rate, positive into the sector.
+    //!   A source is expressed per unit volume and, when the model conserves
+    //!   surface volume, in surface volume rather than mass, so both
+    //!   conversions happen here. The reference density is the interior cell's,
+    //!   which is the one the producing run used to form the mass, so the round
+    //!   trip is exact.
+    void addFluxNncSource_(RateVector& rate, const unsigned globalDofIdx) const
+    {
+        const auto& faces = this->fluxNncFacesAt_(globalDofIdx);
+        if (faces.empty()) {
+            return;
+        }
+
+        const auto* fluxData = this->fluxBoundaryData_();
+        const auto* fluxStep = this->fluxBoundaryReportStep_();
+        if ((fluxData == nullptr) || (fluxStep == nullptr)) {
+            return;
+        }
+
+        const auto fluxEnabled = (static_cast<int>(fluxData->header.mode)
+                                  & static_cast<int>(EclIO::FluxFile::Mode::Flux)) != 0;
+        if (!fluxEnabled) {
+            return;
+        }
+
+        const auto faceCount = static_cast<std::size_t>(fluxData->header.numBoundaryFaces);
+        const auto phaseCount = static_cast<std::size_t>(fluxData->header.numPhases);
+        if ((phaseCount == 0)
+            || (fluxStep->massRates.size() != faceCount * phaseCount))
+        {
+            return;
+        }
+
+        const auto volume = this->model().dofTotalVolume(globalDofIdx);
+        if (!(volume > 0.0)) {
+            return;
+        }
+
+        const auto pvtRegionIdx = this->pvtRegionIndex(globalDofIdx);
+
+        const auto add = [&](const std::size_t slot,
+                             const unsigned phaseIdx,
+                             const unsigned compIdx)
+        {
+            if (!FluidSystem::phaseIsActive(phaseIdx)) {
+                return;
+            }
+
+            auto massRate = fluxStep->massRates[slot] / volume;
+            if constexpr (getPropValue<TypeTag, Properties::BlackoilConserveSurfaceVolume>()) {
+                massRate /= FluidSystem::referenceDensity(phaseIdx, pvtRegionIdx);
+            }
+
+            rate[FluidSystem::canonicalToActiveCompIdx(compIdx)] += massRate;
+        };
+
+        for (const auto faceIndex : faces) {
+            if ((faceIndex < 0) || (static_cast<std::size_t>(faceIndex) >= faceCount)) {
+                continue;
+            }
+
+            const auto base = static_cast<std::size_t>(faceIndex) * phaseCount;
+            std::size_t phaseSlot = 0;
+
+            if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Oil)) {
+                add(base + phaseSlot, oilPhaseIdx, oilCompIdx);
+                ++phaseSlot;
+            }
+            if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Water)) {
+                add(base + phaseSlot, waterPhaseIdx, waterCompIdx);
+                ++phaseSlot;
+            }
+            if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Gas)) {
+                add(base + phaseSlot, gasPhaseIdx, gasCompIdx);
+            }
+        }
+    }
+
     template <class ScalarFluidState>
     RateVector fluxPhaseVolToMassRate_(const RateVector& phaseVolRate,
                                        const ScalarFluidState& insideFs,

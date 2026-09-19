@@ -77,6 +77,17 @@ public:
                                                               double time);
 
     std::array<std::vector<int>, 6> buildDirectionalFaceIndices(std::size_t numActiveCells) const;
+
+    /// Boundary faces that reach their neighbour through a non-neighbour
+    /// connection, indexed by the interior cell they belong to.
+    ///
+    /// These cannot go in the directional index: they have no face direction,
+    /// because the cell they connect to is not an axis neighbour, and one cell
+    /// may carry several of them. The reduced run has no such connection in its
+    /// own grid either, so what crosses one enters as a source in the interior
+    /// cell rather than through a face.
+    std::vector<std::vector<int>> buildNncFaceIndices(std::size_t numActiveCells) const;
+
     const Face* faceFromSlot(int slot) const;
 
     template <class TransmissibilityLike>
