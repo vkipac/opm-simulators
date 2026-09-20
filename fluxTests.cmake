@@ -297,6 +297,18 @@ if (BUILD_FLOW)
         -p "bash ${PROJECT_SOURCE_DIR}/tests/check-twowell-useflux-live-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_COMPARE_ECL_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_DUMPFLUX_LIVE_1D.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_USEFLUX_LIVE_1D.DATA"
     )
 
+    set(_twowell_useflux_nnc_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+twowell_useflux_nnc_smoke)
+
+    opm_add_test(twowell_useflux_nnc_smoke
+      EXE_TARGET
+        flow_blackoil
+      DRIVER_ARGS
+        -i ${PROJECT_SOURCE_DIR}/tests/data/sector
+        -r ${_twowell_useflux_nnc_result_path}
+        -f TWOWELL_DUMPFLUX_NNC_1D
+        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-twowell-useflux-nnc-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_COMPARE_ECL_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_DUMPFLUX_NNC_1D.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_USEFLUX_NNC_1D.DATA"
+    )
+
     set(_twowell_useflux_pressure_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+twowell_useflux_pressure_smoke)
     opm_add_test(twowell_useflux_pressure_smoke
       DEPENDS
