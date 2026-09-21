@@ -7,20 +7,25 @@ set -euo pipefail
 # alongside that pressure is what decides, and for a face sealed by a fault or
 # a multiplier it is zero.
 #
-# The sector is the i=1 column, whose only boundary faces are the ten I+ faces
-# towards i=2, all sealed by MULTX in the parent. The parent's producer pulls
-# the far side down to 50 bar while the sealed column stays at its initial 300
-# bar. The sector deck carries no multiplier of its own, so the only thing that
-# can hold it at 300 bar is the zero transmissibility in the FLUX file: without
-# it the face falls back on the default outer-boundary transmissibility and the
-# column drains to 50 bar, which is a mistake far too large to be mistaken for
-# drift.
+# The parent's producer pulls the far side of the sealed boundary down to 50
+# bar while the sector stays at its initial 300 bar. The sector deck carries no
+# multiplier of its own, so the only thing that can hold it there is the zero
+# transmissibility in the FLUX file: without it the face falls back on the
+# default outer-boundary transmissibility and the sector drains to 50 bar,
+# which is far too large a mistake to be confused with drift.
+#
+# Used for two sector shapes. Which one matters is the position of the sealed
+# face in the cell's boundary-face list, since that is how the discretisation
+# addresses it -- see the comments in the two producer decks.
 
 flow_bin="$1"
 summary_bin="$2"
 inspect_bin="$3"
 producer_deck="$4"
 consumer_deck="$5"
+sector_cell="$6"       # i,j,k of a sector cell carrying the sealed face
+exterior_cell="$7"     # i,j,k of the cell on the far side of it
+face_label="$8"        # how inspect_flux names that face, e.g. I+ or K+
 
 parent_base="$(basename "$producer_deck" .DATA)"
 sector_base="$(basename "$consumer_deck" .DATA)"
@@ -39,8 +44,8 @@ last_value() {
 }
 
 # 1. The parent has to actually be sealed, or there is nothing to reproduce.
-parent_sector="$(last_value "$parent_base" "BPR:1,1,5")"
-parent_exterior="$(last_value "$parent_base" "BPR:2,1,5")"
+parent_sector="$(last_value "$parent_base" "BPR:${sector_cell}")"
+parent_exterior="$(last_value "$parent_base" "BPR:${exterior_cell}")"
 
 awk -v got="$parent_sector" -v want="$initial_pressure" 'BEGIN {
     if ((got - want) ^ 2 > 0.01) {
@@ -58,10 +63,10 @@ awk -v got="$parent_exterior" -v want="$exterior_pressure" 'BEGIN {
 
 # 2. The face must be described, and described as sealed. A file that simply
 #    omitted it would also keep the sector at 300 bar, for the wrong reason.
-"$inspect_bin" "${parent_base}.FLUX" 1 1 5 2> inspect_fault.log > series_fault.txt
+"$inspect_bin" "${parent_base}.FLUX" ${sector_cell//,/ } 2> inspect_fault.log > series_fault.txt
 
-if ! grep -qE "^ +I\+ .* transmissibility 0 " inspect_fault.log; then
-    echo "check-flux-fault-boundary-smoke: expected an I+ face with zero transmissibility" >&2
+if ! grep -qE "^ +${face_label//+/\\+} .* transmissibility 0 " inspect_fault.log; then
+    echo "check-flux-fault-boundary-smoke: expected a $face_label face with zero transmissibility" >&2
     cat inspect_fault.log >&2
     exit 1
 fi
@@ -77,7 +82,7 @@ fi
 
 # 3. And the reduced run must hold, matching the parent rather than the
 #    pressure on the far side of the sealed face.
-sector_value="$(last_value "$sector_base" "BPR:1,1,5")"
+sector_value="$(last_value "$sector_base" "BPR:${sector_cell}")"
 
 awk -v got="$sector_value" -v want="$parent_sector" -v leak="$exterior_pressure" 'BEGIN {
     if ((got - want) ^ 2 > 0.01) {

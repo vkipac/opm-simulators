@@ -2058,6 +2058,7 @@ protected:
             this->fluxBoundary_.reset();
             this->fluxBoundaryFaceIndex_.data = {};
             this->fluxBoundaryFaceArea_.data = {};
+            this->fluxBoundaryFaceOrdinal_.data = {};
             return;
         }
 
@@ -2177,9 +2178,20 @@ protected:
     // The FLUX file stores total volumetric rates across each boundary face,
     // while the linearizer multiplies the boundary rate vector by the face
     // area. Record the areas so the prescribed rates can be normalised.
+    //! \brief Face areas and stencil ordinals of the sector boundary, per
+    //!        (cell, direction).
+    //!
+    //! \details The ordinal is where the face sits in the cell's list of
+    //!   boundary faces, which is the index the discretisation addresses it by.
+    //!   It is NOT the direction index: the stencil appends a boundary face for
+    //!   every intersection that has no neighbour, in iteration order, so a cell
+    //!   whose I- neighbour lies inside the sector has its I+ face at ordinal
+    //!   zero. Anything handing the discretisation a per-face quantity has to
+    //!   go through here or it lands on the wrong face.
     void collectFluxBoundaryFaceAreas_(const std::size_t numElems)
     {
         this->fluxBoundaryFaceArea_.resize(numElems, 0.0);
+        this->fluxBoundaryFaceOrdinal_.resize(numElems, -1);
 
         if (!this->fluxBoundary_) {
             return;
@@ -2190,7 +2202,19 @@ protected:
 
         for (const auto& elem : elements(gridView)) {
             const auto elemIdx = elementMapper.index(elem);
+
+            int ordinal = 0;
             for (const auto& is : intersections(gridView, elem)) {
+                // Counted exactly as EcfvStencil::updateTopology() does, which
+                // means counting intersections without a neighbour rather than
+                // boundary intersections: on a process boundary the two differ,
+                // and it is the stencil's numbering the solver will use.
+                if (is.neighbor()) {
+                    continue;
+                }
+
+                const auto thisOrdinal = ordinal++;
+
                 if (!is.boundary()) {
                     continue;
                 }
@@ -2199,6 +2223,7 @@ protected:
                 auto& areas = this->fluxBoundaryFaceArea_(dir);
                 if (static_cast<std::size_t>(elemIdx) < areas.size()) {
                     areas[elemIdx] = is.geometry().volume();
+                    this->fluxBoundaryFaceOrdinal_(dir)[elemIdx] = thisOrdinal;
                 }
             }
         }
@@ -2262,7 +2287,18 @@ protected:
             return;
         }
 
-        this->fluxBoundary_->applyTransmissibilityOverrides(transmissibilities_);
+        // The discretisation addresses a boundary face by its position in the
+        // cell's boundary-face list, not by its direction, so the override has
+        // to be told where each face sits or it writes onto a different face.
+        const auto ordinal = [this](const int activeCell, const FaceDir::DirEnum dir)
+        {
+            const auto& ordinals = this->fluxBoundaryFaceOrdinal_(dir);
+            const auto cell = static_cast<std::size_t>(activeCell);
+
+            return (activeCell >= 0) && (cell < ordinals.size()) ? ordinals[cell] : -1;
+        };
+
+        this->fluxBoundary_->applyTransmissibilityOverrides(transmissibilities_, ordinal);
     }
 
     // this method applies the runtime constraints specified via the deck and/or command
@@ -2454,6 +2490,7 @@ protected:
     //! \brief Sector-boundary NNC faces per interior cell, indexed by active cell.
     std::vector<std::vector<int>> fluxNncFaceIndex_;
     BCData<Scalar> fluxBoundaryFaceArea_;
+    BCData<int> fluxBoundaryFaceOrdinal_;
     std::shared_ptr<FluxBoundary> fluxBoundary_;
     std::shared_ptr<ParentSummary> fluxParentSummaryData_;
     const EclIO::FluxFile::ReportStep* fluxBoundaryActiveRecord_ = nullptr;

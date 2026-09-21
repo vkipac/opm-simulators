@@ -90,8 +90,19 @@ public:
 
     const Face* faceFromSlot(int slot) const;
 
-    template <class TransmissibilityLike>
-    std::size_t applyTransmissibilityOverrides(TransmissibilityLike& transmissibility) const
+    //! \brief Replace the default outer-boundary transmissibility of every
+    //!        sector face with the one the parent run had across it.
+    //!
+    //! \param[in] boundaryFaceOrdinal Where a face sits in its cell's list of
+    //!   boundary faces, given the interior active cell and the direction. That
+    //!   position, not the direction, is how the discretisation addresses a
+    //!   boundary face: the stencil appends one per intersection without a
+    //!   neighbour, in iteration order, so a cell whose I- neighbour is inside
+    //!   the sector carries its I+ face at position zero. Faces it reports as
+    //!   absent have no grid face here and are left alone.
+    template <class TransmissibilityLike, class BoundaryFaceOrdinal>
+    std::size_t applyTransmissibilityOverrides(TransmissibilityLike& transmissibility,
+                                               BoundaryFaceOrdinal&& boundaryFaceOrdinal) const
     {
         std::size_t appliedCount = 0;
         for (const auto& face : this->faces_) {
@@ -105,6 +116,11 @@ public:
                 continue;
             }
 
+            const auto ordinal = boundaryFaceOrdinal(face.interiorActiveCell, face.direction);
+            if (ordinal < 0) {
+                continue;
+            }
+
             // A face the parent could not flow through must not become an open
             // boundary here. Zero is applied rather than skipped, because
             // skipping would leave the default outer-boundary value in place
@@ -113,9 +129,8 @@ public:
                 ? face.transmissibility
                 : decltype(face.transmissibility){0};
 
-            const auto boundaryFaceIdx = static_cast<unsigned>(FaceDir::ToIntersectionIndex(face.direction));
             transmissibility.setTransmissibilityBoundary(static_cast<unsigned>(face.interiorActiveCell),
-                                                         boundaryFaceIdx,
+                                                         static_cast<unsigned>(ordinal),
                                                          value);
             ++appliedCount;
         }

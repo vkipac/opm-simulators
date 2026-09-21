@@ -277,35 +277,47 @@ BOOST_AUTO_TEST_CASE(AppliesTransmissibilityOverridesWithFiltering)
 
     const auto boundary = Opm::FluxBoundary::fromData(data, {0, 1, 2, 3, 4, 5});
     DummyTransmissibility transmissibility;
-    const auto applied = boundary.applyTransmissibilityOverrides(transmissibility);
+
+    // Where a face sits in its cell's boundary-face list, which is how the
+    // discretisation addresses it. Deliberately not the direction index: cell 1
+    // carries its I+ face at position zero, which is what happens when the
+    // cell's I- neighbour lies inside the sector. Cell 4 has no grid face at
+    // all and is reported absent.
+    const auto ordinal = [](const int activeCell, const Opm::FaceDir::DirEnum)
+    {
+        switch (activeCell) {
+        case 0:  return 0;
+        case 1:  return 0;
+        case 3:  return 2;
+        case 4:  return -1;
+        default: return 5;
+        }
+    };
+
+    const auto applied = boundary.applyTransmissibilityOverrides(transmissibility, ordinal);
 
     // Faces without a direction, and faces whose stored transmissibility is not
-    // a number, carry no information and are left alone. A stored value of zero
-    // or less does carry information -- the parent could not flow through the
+    // a number, carry no information and are left alone. Nor is there anything
+    // to do for a face with no grid face in this run. A stored value of zero or
+    // less does carry information -- the parent could not flow through the
     // face -- so it is applied as zero to keep the face closed.
-    BOOST_CHECK_EQUAL(applied, 4U);
-    BOOST_REQUIRE_EQUAL(transmissibility.calls.size(), 4U);
+    BOOST_CHECK_EQUAL(applied, 3U);
+    BOOST_REQUIRE_EQUAL(transmissibility.calls.size(), 3U);
 
     BOOST_CHECK_EQUAL(std::get<0>(transmissibility.calls[0]), 0U);
-    BOOST_CHECK_EQUAL(std::get<1>(transmissibility.calls[0]),
-                      static_cast<unsigned>(Opm::FaceDir::ToIntersectionIndex(Opm::FaceDir::XMinus)));
+    BOOST_CHECK_EQUAL(std::get<1>(transmissibility.calls[0]), 0U);
     BOOST_CHECK_CLOSE(std::get<2>(transmissibility.calls[0]), 4.5, 1e-12);
 
+    // The one that matters: addressed by its position, not by XPlus.
     BOOST_CHECK_EQUAL(std::get<0>(transmissibility.calls[1]), 1U);
-    BOOST_CHECK_EQUAL(std::get<1>(transmissibility.calls[1]),
-                      static_cast<unsigned>(Opm::FaceDir::ToIntersectionIndex(Opm::FaceDir::XPlus)));
+    BOOST_CHECK_EQUAL(std::get<1>(transmissibility.calls[1]), 0U);
     BOOST_CHECK_CLOSE(std::get<2>(transmissibility.calls[1]), 7.25, 1e-12);
 
-    // The zero and the negative face are both clamped to zero.
+    // The zero face is clamped to zero; the negative one never gets that far,
+    // having no grid face to be applied to.
     BOOST_CHECK_EQUAL(std::get<0>(transmissibility.calls[2]), 3U);
-    BOOST_CHECK_EQUAL(std::get<1>(transmissibility.calls[2]),
-                      static_cast<unsigned>(Opm::FaceDir::ToIntersectionIndex(Opm::FaceDir::YMinus)));
+    BOOST_CHECK_EQUAL(std::get<1>(transmissibility.calls[2]), 2U);
     BOOST_CHECK_EQUAL(std::get<2>(transmissibility.calls[2]), 0.0);
-
-    BOOST_CHECK_EQUAL(std::get<0>(transmissibility.calls[3]), 4U);
-    BOOST_CHECK_EQUAL(std::get<1>(transmissibility.calls[3]),
-                      static_cast<unsigned>(Opm::FaceDir::ToIntersectionIndex(Opm::FaceDir::YPlus)));
-    BOOST_CHECK_EQUAL(std::get<2>(transmissibility.calls[3]), 0.0);
 }
 
 BOOST_AUTO_TEST_CASE(SelectInputPathPrefersExactFluxFile)

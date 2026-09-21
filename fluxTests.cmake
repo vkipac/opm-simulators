@@ -183,7 +183,22 @@ if (BUILD_FLOW)
           -i ${PROJECT_SOURCE_DIR}/tests/flux
           -r ${_flux_fault_boundary_result_path}
           -f FLUX_DUMP_FAULT_SMOKE
-          -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-fault-boundary-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_SUMMARY_BIN} ${PROJECT_BINARY_DIR}/bin/inspect_flux ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_FAULT_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_FAULT_SMOKE.DATA"
+          -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-fault-boundary-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_SUMMARY_BIN} ${PROJECT_BINARY_DIR}/bin/inspect_flux ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_FAULT_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_FAULT_SMOKE.DATA 1,1,5 2,1,5 I+"
+      )
+
+      # Same seal, but on a K face, which a cell reaches through a different
+      # slot in its boundary-face list because its I neighbours are inside the
+      # sector. That is the arrangement the column case above cannot produce.
+      set(_flux_kfault_boundary_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_kfault_boundary_smoke)
+
+      opm_add_test(flux_kfault_boundary_smoke
+        EXE_TARGET
+          flow_blackoil
+        DRIVER_ARGS
+          -i ${PROJECT_SOURCE_DIR}/tests/flux
+          -r ${_flux_kfault_boundary_result_path}
+          -f FLUX_DUMP_KFAULT_SMOKE
+          -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-fault-boundary-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_SUMMARY_BIN} ${PROJECT_BINARY_DIR}/bin/inspect_flux ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_KFAULT_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_KFAULT_SMOKE.DATA 5,1,1 5,1,2 K+"
       )
     endif()
 
