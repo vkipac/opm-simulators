@@ -76,7 +76,7 @@ if (BUILD_FLOW)
       -i ${PROJECT_SOURCE_DIR}/tests/flux
       -r ${_flux_pressure_result_path}
       -f FLUX_DUMP_PRESSURE_SMOKE
-      -p "${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check FLUX_DUMP_PRESSURE_SMOKE.FLUX 10 1 10 10 1 5 PRESSURE"
+      -p "${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check FLUX_DUMP_PRESSURE_SMOKE.FLUX 10 1 10 1 1 2 PRESSURE"
   )
 
   set(_flux_both_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_dump_both_smoke)
@@ -147,7 +147,7 @@ if (BUILD_FLOW)
       -r ${_make_flux_pressure_equivalence_mpi_result_path}
       -f FLUX_DUMP_PRESSURE_SMOKE
       -n 2
-      -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-equivalence-smoke.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_PRESSURE_SMOKE.DATA FLUX_DUMP_PRESSURE_SMOKE pressure 10 --compare-arg=--ignore-pressures"
+      -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-equivalence-smoke.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_PRESSURE_SMOKE.DATA FLUX_DUMP_PRESSURE_SMOKE pressure 10 --compare-arg=--ignore-pressures --compare-arg=--ignore-transmissibilities"
   )
 
     set(_make_flux_fluxnum_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+make_flux_fluxnum_smoke)
@@ -191,7 +191,7 @@ if (BUILD_FLOW)
         -r ${_make_flux_flux_equivalence_mpi_result_path}
         -f FLUX_DUMP_FLORES_SMOKE
         -n 2
-        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-equivalence-smoke.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_FLORES_SMOKE.DATA FLUX_DUMP_FLORES_SMOKE flux 0"
+        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-equivalence-smoke.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_FLORES_SMOKE.DATA FLUX_DUMP_FLORES_SMOKE flux 0 --compare-arg=--ignore-transmissibilities"
     )
 
   set(_make_flux_pressure_sector_regression_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+make_flux_pressure_sector_regression_smoke)

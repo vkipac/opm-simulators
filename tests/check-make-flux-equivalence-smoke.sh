@@ -11,7 +11,7 @@ mapping_text="${mapping_text#\'}"
 mapping_text="${mapping_text%\'}"
 
 expected_flux_file=""
-compare_arg=""
+compare_args=()
 no_summary=0
 
 for extra in "${@:7}"; do
@@ -20,7 +20,7 @@ for extra in "${@:7}"; do
             expected_flux_file="${extra#--expected=}"
             ;;
         --compare-arg=*)
-            compare_arg="${extra#--compare-arg=}"
+            compare_args+=("${extra#--compare-arg=}")
             ;;
         --no-summary)
             no_summary=1
@@ -84,8 +84,4 @@ fi
     --mode="$mode" \
     > "make_flux_${mode}_equivalence.log" 2>&1
 
-if [[ -n "$compare_arg" ]]; then
-    "$compare_bin" "$expected_flux_file" "${parent_root}.MAKE.FLUX" "$compare_arg"
-else
-    "$compare_bin" "$expected_flux_file" "${parent_root}.MAKE.FLUX"
-fi
+"$compare_bin" "$expected_flux_file" "${parent_root}.MAKE.FLUX" "${compare_args[@]}"

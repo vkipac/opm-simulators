@@ -161,8 +161,15 @@ int main(int argc, char** argv)
         const auto expectFlux = hasFluxMode(h.mode);
         const auto expectPressure = hasPressureMode(h.mode);
 
-        if (rawFile.hasKey("FLXRATE") != expectFlux) {
-            return fail("unexpected FLXRATE array presence in " + path);
+        // Surface-volume rates were dropped in format version 6. A flux-mode
+        // file now carries component masses and nothing else, so that a
+        // consumer cannot pick the one of the two that suits it and silently
+        // disagree with the producer.
+        if (rawFile.hasKey("FLXRATE")) {
+            return fail("FLXRATE is no longer part of the format but is present in " + path);
+        }
+        if (rawFile.hasKey("FLXMASS") != expectFlux) {
+            return fail("unexpected FLXMASS array presence in " + path);
         }
         if (rawFile.hasKey("FLXPRES") != expectPressure) {
             return fail("unexpected FLXPRES array presence in " + path);
@@ -186,7 +193,7 @@ int main(int argc, char** argv)
         for (const auto& step : data.reportSteps) {
             const auto expectedRateSize = expectFlux ? expectedRates : 0U;
             if (step.massRates.size() != expectedRateSize) {
-                return fail("unexpected FLXRATE payload size in " + path);
+                return fail("unexpected FLXMASS payload size in " + path);
             }
 
             const auto expectedFaceSize = expectPressure

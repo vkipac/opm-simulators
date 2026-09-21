@@ -2006,6 +2006,14 @@ private:
                 const auto interior = vanguard.compressedIndex(face.interiorGlobalCell);
                 const auto exterior = vanguard.compressedIndex(face.exteriorGlobalCell);
                 if (interior < 0 || exterior < 0) {
+                    // FIXME: in parallel the dumpers live on the IO rank alone,
+                    // which owns only its own partition, so every face outside
+                    // it silently keeps a zero transmissibility here. The fix
+                    // needs the face list on all ranks and a reduction onto the
+                    // writer, which the current IO-rank-only structure of this
+                    // class does not allow. Until then a FLUX file written in
+                    // parallel carries zero transmissibilities and a consumer
+                    // falls back on its outer-boundary default.
                     continue;
                 }
 

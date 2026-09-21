@@ -34,6 +34,14 @@ PORO
 PERMX
   100*500 /
 
+-- Two cells are inactive, so a cell's index among the active ones differs
+-- from its global one for everything after them. Restart arrays are written
+-- per active cell while a region is described in global indices, so anything
+-- that confuses the two reads the wrong cell here. Neither cell borders any
+-- of the sectors the tests select, so the boundaries themselves are unchanged.
+ACTNUM
+  8*1 2*0 90*1 /
+
 FLUXNUM
   10*0 1 89*0 /
 
@@ -127,6 +135,15 @@ PRESSURE
   100*300.0 /
 
 SCHEDULE
+
+-- TUNING takes three records. The fourth slash is deliberate: decks in the
+-- wild carry stray slashes like this one, flow accepts them, and so must any
+-- tool that has to read the same deck back.
+TUNING
+/
+/
+/
+/
 
 TSTEP
   1 /

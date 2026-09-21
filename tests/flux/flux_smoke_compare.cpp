@@ -31,6 +31,19 @@ bool closeEnough(const double lhs, const double rhs, const double tol)
     return std::abs(lhs - rhs) <= tol * scale;
 }
 
+//! \brief Compare two values on their own scale rather than against unity.
+//!
+//! \details Needed for quantities that are genuinely tiny in SI.
+//!   Transmissibility is the one that matters here: it runs around 1e-12, so
+//!   closeEnough() treats every value as indistinguishable from zero and from
+//!   every other value. Returns true when both are zero, which is how a file
+//!   that carries no transmissibility at all is represented.
+bool relativelyClose(const double lhs, const double rhs, const double tol)
+{
+    const auto scale = std::max(std::abs(lhs), std::abs(rhs));
+    return std::abs(lhs - rhs) <= tol * scale;
+}
+
 bool compareVector(const std::vector<double>& lhs,
                    const std::vector<double>& rhs,
                    const std::string& name,
@@ -97,6 +110,7 @@ int main(int argc, char** argv)
 {
     bool ignorePressures = false;
     bool ignoreTimes = false;
+    bool ignoreTransmissibilities = false;
     for (int i = 3; i < argc; ++i) {
         const std::string arg{argv[i]};
         if (arg == "--ignore-pressures") {
@@ -107,12 +121,23 @@ int main(int argc, char** argv)
             ignoreTimes = true;
             continue;
         }
+        // Only for comparing against a file a PARALLEL run produced. The
+        // dumpers live on the IO rank alone, so it can only reach the faces of
+        // its own partition and writes zero for the rest. See the FIXME in
+        // EclWriter::assignFluxDumperTransmissibilities_(). Do not reach for
+        // this to make a serial comparison pass.
+        if (arg == "--ignore-transmissibilities") {
+            ignoreTransmissibilities = true;
+            continue;
+        }
 
-        return fail("usage: flux_smoke_compare <expected.FLUX> <actual.FLUX> [--ignore-pressures] [--ignore-times]");
+        return fail("usage: flux_smoke_compare <expected.FLUX> <actual.FLUX>"
+                    " [--ignore-pressures] [--ignore-times] [--ignore-transmissibilities]");
     }
 
     if (argc < 3) {
-        return fail("usage: flux_smoke_compare <expected.FLUX> <actual.FLUX> [--ignore-pressures] [--ignore-times]");
+        return fail("usage: flux_smoke_compare <expected.FLUX> <actual.FLUX>"
+                    " [--ignore-pressures] [--ignore-times] [--ignore-transmissibilities]");
     }
 
     const auto expected = Opm::EclIO::FluxFile::read(argv[1]);
@@ -186,11 +211,16 @@ int main(int argc, char** argv)
     for (std::size_t i = 0; i < expected.boundaryFaces.size(); ++i) {
         const auto& lhs = expected.boundaryFaces[i];
         const auto& rhs = actual.boundaryFaces[i];
-        const bool ignoreTransmissibility = closeEnough(lhs.transmissibility, 0.0, 1e-12);
+        // A tool that rebuilds the boundary from a parent's INIT file reads
+        // single-precision transmissibilities where the simulator had doubles,
+        // so allow for that but nothing looser.
+        const bool transmissibilityMatch = ignoreTransmissibilities
+            || relativelyClose(lhs.transmissibility, rhs.transmissibility, 1e-6);
+
         if (lhs.interiorLocalCell != rhs.interiorLocalCell
             || lhs.direction != rhs.direction
             || lhs.exteriorGlobalCell != rhs.exteriorGlobalCell
-            || (!ignoreTransmissibility && !closeEnough(lhs.transmissibility, rhs.transmissibility, 1e-10))) {
+            || !transmissibilityMatch) {
             std::cerr << "boundary face mismatch at index " << i << ":\n"
                       << "  interiorLocalCell: " << lhs.interiorLocalCell << " vs " << rhs.interiorLocalCell << '\n'
                       << "  direction: " << lhs.direction << " vs " << rhs.direction << '\n'

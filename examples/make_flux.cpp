@@ -38,6 +38,7 @@
 #include <opm/simulators/flow/flux/FluxDumper.hpp>
 #include <opm/simulators/flow/flux/FluxRegions.hpp>
 #include <opm/simulators/flow/flux/FluxSummaryKeys.hpp>
+#include <opm/simulators/utils/readDeck.hpp>
 
 #include <algorithm>
 #include <array>
@@ -70,6 +71,7 @@ struct Options {
     std::string mode = "pressure";
     std::string sampling = "averaged";
     std::string summary;
+    std::string parsingStrictness = "normal";
     std::vector<std::string> summaryDefines;
     bool noSummary = false;
     bool help = false;
@@ -79,6 +81,7 @@ struct ParentInput {
     fs::path deckPath;
     fs::path rootPath;
     fs::path restartPath;
+    std::optional<fs::path> gridPath;
     std::optional<fs::path> initPath;
     std::optional<fs::path> summaryPath;
 };
@@ -128,6 +131,9 @@ void printUsage()
         << "                                       --fluxnum.\n"
         << "  --sampling=<averaged|instant>        Flux sampling mode (default: averaged)\n"
         << "  --summary=<CASE|CASE.SMSPEC>         Optional parent summary override\n"
+        << "  --parsing-strictness=<normal|low|high>\n"
+        << "                                       Deck parsing strictness, as in flow\n"
+        << "                                       (default: normal)\n"
         << "  --smry-define=<TARGET,SOURCE>        Supply a summary vector the parent did\n"
         << "                                       not write. SOURCE is either another\n"
         << "                                       key to copy or a constant, so both\n"
@@ -199,6 +205,9 @@ Options parseOptions(int argc, char** argv)
         }
         else if (startsWith(arg, "--summary=")) {
             opt.summary = valueAfterEquals(arg);
+        }
+        else if (startsWith(arg, "--parsing-strictness=")) {
+            opt.parsingStrictness = valueAfterEquals(arg);
         }
         else if (startsWith(arg, "--smry-define=")) {
             opt.summaryDefines.push_back(valueAfterEquals(arg));
@@ -368,6 +377,15 @@ ParentInput resolveParentInput(const Options& opt)
         input.initPath = initPath;
     }
 
+    for (const auto* extension : {".EGRID", ".FEGRID"}) {
+        fs::path gridPath = input.rootPath;
+        gridPath += extension;
+        if (fs::exists(gridPath)) {
+            input.gridPath = gridPath;
+            break;
+        }
+    }
+
     if (!opt.summary.empty()) {
         fs::path summaryRoot = rootPathFromArgument(opt.summary);
         fs::path summaryPath{opt.summary};
@@ -401,12 +419,57 @@ ParentInput resolveParentInput(const Options& opt)
     return input;
 }
 
-Opm::Deck loadDeck(const fs::path& deckPath)
+//! \brief The set of cells the parent actually solved for.
+//!
+//! \details The deck's own ACTNUM is not the answer. The simulator drops
+//!   further cells on its way to a grid, MINPV being the usual reason, and it
+//!   is the surviving set that the restart arrays are indexed by and that the
+//!   region boundary has to be built against. The EGRID records that set, so
+//!   read it from there and fall back on the deck only when no EGRID was kept.
+std::vector<int> parentActnum(const std::optional<fs::path>& gridPath,
+                              const Opm::EclipseState& state,
+                              const std::array<int, 3>& dims)
 {
+    const auto numGlobal = static_cast<std::size_t>(dims[0]) * dims[1] * dims[2];
+
+    if (gridPath) {
+        Opm::EclIO::EclFile grid(gridPath->string(), /*preload=*/false);
+        if (grid.hasKey("ACTNUM")) {
+            const auto& values = grid.get<int>("ACTNUM");
+            if (values.size() == numGlobal) {
+                return {values.begin(), values.end()};
+            }
+        }
+    }
+
+    return state.globalFieldProps().actnumRaw();
+}
+
+//!
+//! \details A deck that flow accepts has to be accepted here too. The whole
+//!   point of this tool is to work off a parent case that has already been
+//!   run, so refusing it over a stray slash or a keyword flow merely warns
+//!   about would be gratuitous. Strictness is shared with flow's
+//!   --parsing-strictness so a deck that needs "low" there can get it here.
+Opm::Deck loadDeck(const fs::path& deckPath, const std::string& parsingStrictness)
+{
+    if (parsingStrictness != "normal" && parsingStrictness != "low"
+        && parsingStrictness != "high") {
+        throw std::invalid_argument("--parsing-strictness must be one of 'normal', "
+                                    "'low' or 'high', got '" + parsingStrictness + "'");
+    }
+
+    auto parseContext = Opm::setupParseContext(parsingStrictness == "high");
+    if (parsingStrictness == "low") {
+        parseContext->update(Opm::ParseContext::SCHEDULE_INVALID_NAME,
+                             Opm::InputErrorAction::WARN);
+        parseContext->update(Opm::ParseContext::SCHEDULE_GCONSALE_INVALID_INJECTION,
+                             Opm::InputErrorAction::WARN);
+    }
+
     Opm::Parser parser;
-    Opm::ParseContext parseContext;
     Opm::ErrorGuard errorGuard;
-    auto deck = parser.parseFile(deckPath.string(), parseContext, errorGuard);
+    auto deck = parser.parseFile(deckPath.string(), *parseContext, errorGuard);
     if (errorGuard) {
         errorGuard.dump();
         errorGuard.terminate();
@@ -420,6 +483,103 @@ std::array<int, 3> gridDims(const Opm::EclipseState& state)
     const auto dims = state.gridDims().getNXYZ();
     return {dims[0], dims[1], dims[2]};
 }
+
+//! \brief Resolves a global parent-grid cell index into an output array.
+//!
+//! \details The region description works entirely in global cartesian indices,
+//!   but the files it is read against do not agree on an index space. Restart
+//!   arrays and most INIT arrays hold one entry per ACTIVE cell, while a few
+//!   INIT arrays, PORV among them, hold one per cell of the whole grid. Nothing
+//!   in the file says which, so the length decides.
+//!
+//!   Any model with inactive cells trips over this, which is why every cell
+//!   lookup goes through here rather than indexing an array directly.
+class CellLookup
+{
+public:
+    CellLookup(const std::array<int, 3>& dims, const std::vector<int>& actnum)
+        : globalToActive_(static_cast<std::size_t>(dims[0]) * dims[1] * dims[2], -1)
+    {
+        int active = 0;
+        for (std::size_t cell = 0; cell < this->globalToActive_.size(); ++cell) {
+            // An empty ACTNUM means the deck never restricted the grid.
+            if (actnum.empty() || ((cell < actnum.size()) && (actnum[cell] > 0))) {
+                this->globalToActive_[cell] = active++;
+            }
+        }
+
+        this->numActive_ = static_cast<std::size_t>(active);
+    }
+
+    std::size_t numGlobal() const { return this->globalToActive_.size(); }
+    std::size_t numActive() const { return this->numActive_; }
+
+    //! \brief Reject an array that belongs to neither index space.
+    //!
+    //! \details Checked up front so that a file from a different grid is
+    //!   reported as such, rather than as an out-of-range access part way
+    //!   through the report steps.
+    void require(const std::vector<double>& values, const std::string& name) const
+    {
+        if ((values.size() != this->numGlobal()) && (values.size() != this->numActive())) {
+            throw std::invalid_argument("array '" + name + "' holds " + std::to_string(values.size())
+                                        + " values, which is neither the parent grid's "
+                                        + std::to_string(this->numGlobal()) + " cells nor its "
+                                        + std::to_string(this->numActive())
+                                        + " active cells; the output does not match the deck");
+        }
+    }
+
+    //! \brief Value at a global cell, or nothing when the cell has no entry.
+    std::optional<double> operator()(const std::vector<double>& values, const int globalCell) const
+    {
+        if (values.empty() || (globalCell < 0)) {
+            return std::nullopt;
+        }
+
+        const auto index = (values.size() == this->numGlobal())
+            ? static_cast<std::ptrdiff_t>(globalCell)
+            : this->activeIndex(globalCell);
+
+        if ((index < 0) || (static_cast<std::size_t>(index) >= values.size())) {
+            return std::nullopt;
+        }
+
+        return values[static_cast<std::size_t>(index)];
+    }
+
+    //! \brief Value at a global cell, or \p fallback when there is none.
+    double valueOr(const std::vector<double>& values,
+                   const int globalCell,
+                   const double fallback = 0.0) const
+    {
+        return (*this)(values, globalCell).value_or(fallback);
+    }
+
+    //! \brief Value at a global cell, refusing to carry on without one.
+    double required(const std::vector<double>& values,
+                    const int globalCell,
+                    const std::string& name) const
+    {
+        if (const auto value = (*this)(values, globalCell)) {
+            return *value;
+        }
+
+        throw std::invalid_argument("parent cell " + std::to_string(globalCell)
+                                    + " has no entry in '" + name
+                                    + "'; the sector borders a cell the parent did not solve for");
+    }
+
+private:
+    std::vector<int> globalToActive_;
+    std::size_t numActive_{0};
+
+    std::ptrdiff_t activeIndex(const int globalCell) const
+    {
+        const auto cell = static_cast<std::size_t>(globalCell);
+        return (cell < this->globalToActive_.size()) ? this->globalToActive_[cell] : -1;
+    }
+};
 
 int phaseMask(const Opm::Deck& deck)
 {
@@ -819,7 +979,15 @@ std::vector<double> loadTransArray(Opm::EclIO::ERst& restart,
     return {values.begin(), values.end()};
 }
 
+//! \brief Transmissibility of one boundary face, in SI.
+//!
+//! \details TRANX holds the transmissibility of the face on the cell's POSITIVE
+//!   side, so a minus-facing boundary face is described by the array entry of
+//!   the cell outside the sector. The arrays are in the deck's units while the
+//!   FLUX payload is SI throughout, so convert on the way out.
 double transmissibilityForFace(const Opm::FluxRegions::BoundaryFace& face,
+                               const CellLookup& cells,
+                               const Opm::UnitSystem& unitSystem,
                                const std::vector<double>& tranx,
                                const std::vector<double>& trany,
                                const std::vector<double>& tranz)
@@ -829,25 +997,30 @@ double transmissibilityForFace(const Opm::FluxRegions::BoundaryFace& face,
             throw std::invalid_argument(std::string{"mapping reaches the outer parent boundary; "}
                                         + "cannot build pressure-mode FLUX state for " + axis + " face without exterior cell");
         }
-        return static_cast<std::size_t>(index);
+        return index;
     };
 
-    switch (face.direction) {
-    case Opm::FaceDir::XPlus:
-        return tranx.at(requireIndex(face.interiorGlobalCell, "X+"));
-    case Opm::FaceDir::XMinus:
-        return tranx.at(requireIndex(face.exteriorGlobalCell, "X-"));
-    case Opm::FaceDir::YPlus:
-        return trany.at(requireIndex(face.interiorGlobalCell, "Y+"));
-    case Opm::FaceDir::YMinus:
-        return trany.at(requireIndex(face.exteriorGlobalCell, "Y-"));
-    case Opm::FaceDir::ZPlus:
-        return tranz.at(requireIndex(face.interiorGlobalCell, "Z+"));
-    case Opm::FaceDir::ZMinus:
-        return tranz.at(requireIndex(face.exteriorGlobalCell, "Z-"));
-    default:
-        throw std::invalid_argument("unsupported boundary face direction in mapping");
-    }
+    const auto value = [&]()
+    {
+        switch (face.direction) {
+        case Opm::FaceDir::XPlus:
+            return cells.required(tranx, requireIndex(face.interiorGlobalCell, "X+"), "TRANX");
+        case Opm::FaceDir::XMinus:
+            return cells.required(tranx, requireIndex(face.exteriorGlobalCell, "X-"), "TRANX");
+        case Opm::FaceDir::YPlus:
+            return cells.required(trany, requireIndex(face.interiorGlobalCell, "Y+"), "TRANY");
+        case Opm::FaceDir::YMinus:
+            return cells.required(trany, requireIndex(face.exteriorGlobalCell, "Y-"), "TRANY");
+        case Opm::FaceDir::ZPlus:
+            return cells.required(tranz, requireIndex(face.interiorGlobalCell, "Z+"), "TRANZ");
+        case Opm::FaceDir::ZMinus:
+            return cells.required(tranz, requireIndex(face.exteriorGlobalCell, "Z-"), "TRANZ");
+        default:
+            throw std::invalid_argument("unsupported boundary face direction in mapping");
+        }
+    }();
+
+    return unitSystem.to_si(Opm::UnitSystem::measure::transmissibility, value);
 }
 
 std::string rateArrayName(const Opm::EclIO::FluxFile::Phase phase,
@@ -1369,6 +1542,7 @@ std::vector<double> requiredRestartArray(Opm::EclIO::ERst& restart,
 void fillPressureStepData(Opm::FluxDumper::ReportStepData& step,
                           const Opm::FluxRegions::Region& region,
                           const Opm::UnitSystem& unitSystem,
+                          const CellLookup& cells,
                           const std::vector<double>& pressure,
                           const std::vector<double>& swat,
                           const std::vector<double>& sgas,
@@ -1410,24 +1584,24 @@ void fillPressureStepData(Opm::FluxDumper::ReportStepData& step,
             throw std::invalid_argument("mapping reaches outer parent boundary; pressure-mode output requires an exterior parent cell for every boundary face");
         }
 
-        const auto exterior = static_cast<std::size_t>(face.exteriorGlobalCell);
+        const auto exterior = face.exteriorGlobalCell;
         step.pressures.push_back(unitSystem.to_si(Opm::UnitSystem::measure::pressure,
-                              pressure.at(exterior)));
+                              cells.required(pressure, exterior, "PRESSURE")));
 
         if (waterActive) {
-            step.swat.push_back(swat.at(exterior));
+            step.swat.push_back(cells.required(swat, exterior, "SWAT"));
         }
         if (gasActive) {
-            step.sgas.push_back(sgas.at(exterior));
+            step.sgas.push_back(cells.required(sgas, exterior, "SGAS"));
         }
         if (includeRs) {
-            step.rs.push_back(rs.empty() ? 0.0 : rs.at(exterior));
+            step.rs.push_back(cells.valueOr(rs, exterior));
         }
         if (includeRv) {
-            step.rv.push_back(rv.empty() ? 0.0 : rv.at(exterior));
+            step.rv.push_back(cells.valueOr(rv, exterior));
         }
         if (hasTemperature) {
-            step.temperature.push_back(temperature.at(exterior));
+            step.temperature.push_back(cells.valueOr(temperature, exterior));
         }
     }
 }
@@ -1491,6 +1665,7 @@ void fillFluxStepData(Opm::FluxDumper::ReportStepData& step,
                       const int phaseMask,
                       const std::map<NncKey, int>& nncPairToIndex,
                       const Opm::UnitSystem& unitSystem,
+                      const CellLookup& cells,
                       const ReferenceDensities& referenceDensity)
 {
     step.massRates.clear();
@@ -1542,16 +1717,14 @@ void fillFluxStepData(Opm::FluxDumper::ReportStepData& step,
             }
 
             const auto& values = loadArray(flowsArrayName(phase, face.direction));
-            const auto interior = static_cast<std::size_t>(face.interiorGlobalCell);
-            if (interior >= values.size()) {
-                throw std::invalid_argument("directional FLOWS array is smaller than expected for parent grid");
-            }
+            const auto flow = cells.required(values, face.interiorGlobalCell,
+                                             flowsArrayName(phase, face.direction));
 
             // Restart directional face rates use the interior-cell face orientation.
             // FLUX files store positive values into the sector, i.e. opposite sign.
             // The restart arrays are written in the deck's output units while the
             // FLUX payload is SI, so convert here.
-            step.massRates.push_back(-unitSystem.to_si(measure, values[interior]) * density);
+            step.massRates.push_back(-unitSystem.to_si(measure, flow) * density);
         }
     }
 }
@@ -1613,6 +1786,7 @@ void retainSummaryKeys(SummaryPayload& payload, const std::vector<std::string>& 
 std::array<double, 16>
 computeExternalRegionSums(const Opm::FluxRegions::Region& region,
                           const Opm::UnitSystem& unitSystem,
+                          const CellLookup& cells,
                           const std::vector<double>& poreVolume,
                           const std::vector<double>& pressure,
                           const std::vector<double>& swat,
@@ -1630,31 +1804,35 @@ computeExternalRegionSums(const Opm::FluxRegions::Region& region,
         }
     }
 
-    const auto at = [](const std::vector<double>& values, const std::size_t cell)
-    {
-        return (cell < values.size()) ? values[cell] : 0.0;
-    };
-
     for (std::size_t cell = 0; cell < inRegion.size(); ++cell) {
         if (inRegion[cell] != 0) {
             continue;
         }
 
-        const auto pv = unitSystem.to_si(Opm::UnitSystem::measure::volume, at(poreVolume, cell));
+        const auto global = static_cast<int>(cell);
+
+        // An inactive cell has no entry in the restart arrays and no pore
+        // volume to contribute, so it drops out here.
+        const auto pv = unitSystem.to_si(Opm::UnitSystem::measure::volume,
+                                         cells.valueOr(poreVolume, global));
         if (!(pv > 0.0)) {
             continue;
         }
 
-        const auto p = unitSystem.to_si(Opm::UnitSystem::measure::pressure, at(pressure, cell));
+        const auto p = unitSystem.to_si(Opm::UnitSystem::measure::pressure,
+                                        cells.valueOr(pressure, global));
         const auto t = temperature.empty()
             ? 0.0
-            : unitSystem.to_si(Opm::UnitSystem::measure::temperature, at(temperature, cell));
-        const auto rsCell = unitSystem.to_si(Opm::UnitSystem::measure::gas_oil_ratio, at(rs, cell));
-        const auto rvCell = unitSystem.to_si(Opm::UnitSystem::measure::oil_gas_ratio, at(rv, cell));
+            : unitSystem.to_si(Opm::UnitSystem::measure::temperature,
+                               cells.valueOr(temperature, global));
+        const auto rsCell = unitSystem.to_si(Opm::UnitSystem::measure::gas_oil_ratio,
+                                             cells.valueOr(rs, global));
+        const auto rvCell = unitSystem.to_si(Opm::UnitSystem::measure::oil_gas_ratio,
+                                             cells.valueOr(rv, global));
 
         // Only the oil and gas filled part of a cell counts towards the
         // hydrocarbon weighting, exactly as RateConverter does it.
-        const auto hydrocarbon = swat.empty() ? 1.0 : (1.0 - at(swat, cell));
+        const auto hydrocarbon = swat.empty() ? 1.0 : (1.0 - cells.valueOr(swat, global));
         const auto hpv = pv * hydrocarbon;
 
         if (hpv > 0.0) {
@@ -1730,7 +1908,7 @@ int run(const Options& opt)
     const ParentInput parentInput = resolveParentInput(opt);
     Opm::OpmLog::setupSimpleDefaultLogging();
 
-    const auto deck = loadDeck(parentInput.deckPath);
+    const auto deck = loadDeck(parentInput.deckPath, opt.parsingStrictness);
     const Opm::EclipseState state(deck);
     const Opm::Schedule schedule(deck, state);
     const auto requiredFallbacks = collectRequiredSummaryFallbacks(schedule);
@@ -1768,11 +1946,15 @@ int run(const Options& opt)
     // The region map is given over every cell of the grid, so it also assigns a
     // region to inactive cells. Hand ACTNUM to the extraction so that this
     // tool builds the same region as an in-simulator DUMPFLUX run would.
-    const auto& actnum = state.globalFieldProps().actnumRaw();
+    const auto actnum = parentActnum(parentInput.gridPath, state, dims);
     const auto regions = Opm::FluxRegions::extract(dims, regionValues, actnum, {});
     if (regions.empty()) {
         throw std::invalid_argument("the region definition selected no cells");
     }
+
+    // Everything from here on is addressed by global cartesian index, while the
+    // parent's restart holds one entry per active cell. This is the translation.
+    const CellLookup cells(dims, actnum);
 
     std::vector<const Opm::FluxRegions::Region*> selectedRegions;
     for (const auto wanted : requestedRegions) {
@@ -1814,6 +1996,9 @@ int run(const Options& opt)
     const auto tranx = loadTransArray(restart, reportSteps.front(), parentInput.initPath, "TRANX");
     const auto trany = loadTransArray(restart, reportSteps.front(), parentInput.initPath, "TRANY");
     const auto tranz = loadTransArray(restart, reportSteps.front(), parentInput.initPath, "TRANZ");
+    cells.require(tranx, "TRANX");
+    cells.require(trany, "TRANY");
+    cells.require(tranz, "TRANZ");
 
     const bool waterActive = (phaseMaskValue & static_cast<int>(Opm::EclIO::FluxFile::Phase::Water)) != 0;
     const bool gasActive = (phaseMaskValue & static_cast<int>(Opm::EclIO::FluxFile::Phase::Gas)) != 0;
@@ -1830,6 +2015,7 @@ int run(const Options& opt)
         Opm::EclIO::EclFile initFile(parentInput.initPath->string(), /*preload=*/false);
         if (initFile.hasKey("PORV")) {
             staticPoreVolume = loadNumericArray(initFile, "PORV");
+            cells.require(staticPoreVolume, "PORV");
         }
     }
 
@@ -1844,7 +2030,8 @@ int run(const Options& opt)
         std::vector<double> boundaryTransmissibilities;
         boundaryTransmissibilities.reserve(region.boundaryFaces.size());
         for (const auto& face : region.boundaryFaces) {
-            boundaryTransmissibilities.push_back(transmissibilityForFace(face, tranx, trany, tranz));
+            boundaryTransmissibilities.push_back(transmissibilityForFace(face, cells, unitSystem,
+                                                                         tranx, trany, tranz));
         }
 
         auto& dumper = dumpers.emplace_back(parentInput.rootPath.filename().string(),
@@ -1939,6 +2126,7 @@ int run(const Options& opt)
         std::vector<double> poreVolume;
         if (hasPressureMode(fluxMode)) {
             pressure = requiredRestartArray(restart, "PRESSURE", sourceReportStep);
+            cells.require(pressure, "PRESSURE");
             swat = waterActive ? requiredRestartArray(restart, "SWAT", sourceReportStep) : std::vector<double>{};
             sgas = gasActive ? requiredRestartArray(restart, "SGAS", sourceReportStep) : std::vector<double>{};
             rs = optionalRestartArray(restart, "RS", sourceReportStep);
@@ -1973,6 +2161,7 @@ int run(const Options& opt)
                                  phaseMaskValue,
                                  nncPairToIndex,
                                  unitSystem,
+                                 cells,
                                  referenceDensity);
             }
 
@@ -1980,6 +2169,7 @@ int run(const Options& opt)
                 fillPressureStepData(step,
                                      region,
                                      unitSystem,
+                                     cells,
                                      pressure,
                                      swat,
                                      sgas,
@@ -1995,6 +2185,7 @@ int run(const Options& opt)
                 if (!poreVolume.empty()) {
                     const auto sums = computeExternalRegionSums(region,
                                                                 unitSystem,
+                                                                cells,
                                                                 poreVolume,
                                                                 pressure,
                                                                 swat,
