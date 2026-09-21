@@ -1444,6 +1444,7 @@ list (APPEND EXAMPLE_SOURCE_FILES
   examples/diffusion_pvs.cpp
   examples/groundwater_immiscible.cpp
   examples/infiltration_pvs.cpp
+  examples/inspect_flux.cpp
   examples/lens_immiscible_ecfv_ad.cpp
   examples/lens_immiscible_ecfv_ad_23.cpp
   examples/lens_immiscible_ecfv_ad_trans.cpp
