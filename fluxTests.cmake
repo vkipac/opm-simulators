@@ -165,6 +165,28 @@ if (BUILD_FLOW)
         -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-fluxnum-smoke.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_PRESSURE_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_SMOKE_ONE_SECTOR.grdecl ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_SMOKE_TWO_SECTORS.grdecl"
     )
 
+    # The summary reader is built and shipped by opm-common, not by
+    # opm-simulators.
+    find_program(OPM_SUMMARY_BIN
+      NAMES summary
+      HINTS ${PROJECT_SOURCE_DIR}/../opm-common/build/bin
+            ${CMAKE_INSTALL_PREFIX}/bin
+      PATH_SUFFIXES bin)
+
+    if(OPM_SUMMARY_BIN)
+      set(_flux_fault_boundary_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_fault_boundary_smoke)
+
+      opm_add_test(flux_fault_boundary_smoke
+        EXE_TARGET
+          flow_blackoil
+        DRIVER_ARGS
+          -i ${PROJECT_SOURCE_DIR}/tests/flux
+          -r ${_flux_fault_boundary_result_path}
+          -f FLUX_DUMP_FAULT_SMOKE
+          -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-fault-boundary-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_SUMMARY_BIN} ${PROJECT_BINARY_DIR}/bin/inspect_flux ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_FAULT_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_FAULT_SMOKE.DATA"
+      )
+    endif()
+
     set(_flux_minpv_boundary_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_minpv_boundary_smoke)
 
     opm_add_test(flux_minpv_boundary_smoke
