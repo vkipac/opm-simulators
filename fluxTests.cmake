@@ -150,6 +150,21 @@ if (BUILD_FLOW)
       -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-equivalence-smoke.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_PRESSURE_SMOKE.DATA FLUX_DUMP_PRESSURE_SMOKE pressure 10 --compare-arg=--ignore-pressures"
   )
 
+    set(_make_flux_fluxnum_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+make_flux_fluxnum_smoke)
+
+    opm_add_test(make_flux_fluxnum_smoke
+      DEPENDS
+        flux_smoke_compare
+        flux_smoke_shape_check
+      EXE_TARGET
+        flow_blackoil
+      DRIVER_ARGS
+        -i ${PROJECT_SOURCE_DIR}/tests/flux
+        -r ${_make_flux_fluxnum_result_path}
+        -f FLUX_DUMP_PRESSURE_SMOKE
+        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-fluxnum-smoke.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_BINARY_DIR}/bin/flux_smoke_shape_check ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_PRESSURE_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_SMOKE_ONE_SECTOR.grdecl ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_SMOKE_TWO_SECTORS.grdecl"
+    )
+
     set(_make_flux_flux_equivalence_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+make_flux_flux_equivalence_smoke)
 
     opm_add_test(make_flux_flux_equivalence_smoke
