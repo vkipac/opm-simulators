@@ -687,10 +687,19 @@ public:
                                         const unsigned boundaryFaceIdx,
                                         const FluidState& exFluidState) const
     {
-        const auto dir = FaceDir::FromIntersectionIndex(static_cast<int>(boundaryFaceIdx));
+        // boundaryFaceIdx is the face's POSITION in this cell's boundary-face
+        // list, which is how the discretisation addresses it, not a direction.
+        // The two only agree while a cell's boundary faces occupy the leading
+        // direction slots, and a cell can have more than six of them: a
+        // corner-point face split by a fault contributes several, and in
+        // parallel every intersection that reaches off this rank counts too.
+        // Reading it as a direction then asks for a seventh one.
+        const auto dir = this->fluxBoundaryDirAt_(globalSpaceIdx, boundaryFaceIdx);
         const auto* fluxData = this->fluxBoundaryData_();
         const auto* fluxStep = this->fluxBoundaryReportStep_();
-        const auto fluxSlot = this->fluxBoundaryFaceSlot_(globalSpaceIdx, dir);
+        const auto fluxSlot = (dir == FaceDir::Unknown)
+            ? 0
+            : this->fluxBoundaryFaceSlot_(globalSpaceIdx, dir);
 
         if (fluxData != nullptr && fluxStep != nullptr && fluxSlot > 0) {
             const auto numPhaseSlots = static_cast<std::size_t>(fluxData->header.numPhases);
@@ -2296,6 +2305,35 @@ protected:
         }
 
         return areas[globalSpaceIdx];
+    }
+
+    //! \brief Which direction the discretisation's \p boundaryFaceIdx refers to
+    //!        on this cell, or Unknown when it is not a sector boundary face.
+    //!
+    //! \details The inverse of the ordinal collected alongside the face areas.
+    //!   Six comparisons rather than a table, because a cell may hold more
+    //!   boundary faces than there are directions and only those the sector
+    //!   boundary uses can be answered for.
+    FaceDir::DirEnum fluxBoundaryDirAt_(const unsigned globalSpaceIdx,
+                                        const unsigned boundaryFaceIdx) const
+    {
+        static constexpr auto directions = std::array {
+            FaceDir::XMinus, FaceDir::XPlus,
+            FaceDir::YMinus, FaceDir::YPlus,
+            FaceDir::ZMinus, FaceDir::ZPlus,
+        };
+
+        for (const auto dir : directions) {
+            const auto& ordinals = this->fluxBoundaryFaceOrdinal_(dir);
+            if ((globalSpaceIdx < ordinals.size())
+                && (ordinals[globalSpaceIdx] >= 0)
+                && (static_cast<unsigned>(ordinals[globalSpaceIdx]) == boundaryFaceIdx))
+            {
+                return dir;
+            }
+        }
+
+        return FaceDir::Unknown;
     }
 
     void applyFluxBoundaryTransmissibilityOverrides_()
