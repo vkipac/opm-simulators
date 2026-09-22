@@ -162,7 +162,17 @@ if (BUILD_FLOW)
         -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-udq-keys.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_UDQKEYS_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_SMOKE_ONE_SECTOR.grdecl"
     )
 
-    set(_make_flux_fluxall_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+make_flux_fluxall_smoke)
+    set(_make_flux_sparse_restart_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+make_flux_sparse_restart_smoke)
+opm_add_test(make_flux_sparse_restart_smoke
+  EXE_TARGET flow_blackoil
+  DRIVER_ARGS
+    -i ${PROJECT_SOURCE_DIR}/tests/flux
+    -r ${_make_flux_sparse_restart_result_path}
+    -f FLUX_DUMP_SPARSE_RESTART_SMOKE
+    -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-sparse-restart.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/inspect_flux ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_SPARSE_RESTART_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_SMOKE_ONE_SECTOR.grdecl"
+)
+
+set(_make_flux_fluxall_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+make_flux_fluxall_smoke)
 opm_add_test(make_flux_fluxall_smoke
   EXE_TARGET flow_blackoil
   DRIVER_ARGS

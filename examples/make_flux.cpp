@@ -2090,6 +2090,7 @@ int run(const Options& opt)
 
     std::optional<SummaryPayload> summaryPayload;
     std::size_t restartStepStartIndex = 0;
+    bool pairSummaryByPosition = true;
     if (parentInput.summaryPath) {
         summaryPayload = loadSummaryPayload(*parentInput.summaryPath);
         addMissingSummaryFallbacks(*summaryPayload, requiredFallbacks, summaryDefines);
@@ -2123,14 +2124,55 @@ int run(const Options& opt)
                   << " of the parent's " << available << " summary vectors, drawn from "
                   << wantedKeywords.size() << " keyword(s) a reduced run can use\n";
 
-        if (summaryPayload->reportTimes.size() == reportSteps.size()) {
+        // The two sequences describe the same run but need not line up. When
+        // they do, pair them by position: that covers a parent writing a
+        // restart at every report step, and the degenerate case of a parent
+        // holding only its initial state, where the one restart record is the
+        // only description of the boundary there is and belongs against the
+        // first summary step.
+        //
+        // When they do not, pair by report step number instead. A deck is
+        // under no obligation to write a restart at every report step --
+        // RPTRST with a FREQ, or BASIC=4 or 5, writes them at a subset -- and
+        // then the sequences have different lengths and the same position
+        // means a different time in each. Summary report step N sits at index
+        // N-1; report step 0 is the initial state, which the summary does not
+        // cover, and which the steps that follow make redundant.
+        const auto summarySteps = summaryPayload->reportTimes.size();
+
+        if (summarySteps == reportSteps.size()) {
             restartStepStartIndex = 0;
+            pairSummaryByPosition = true;
         }
-        else if (summaryPayload->reportTimes.size() + 1 == reportSteps.size() && reportSteps.front() == 0) {
+        else if ((summarySteps + 1 == reportSteps.size()) && (reportSteps.front() == 0)) {
             restartStepStartIndex = 1;
+            pairSummaryByPosition = true;
         }
         else {
-            throw std::invalid_argument("summary report-step TIME vector size does not match restart report-step sequence");
+            pairSummaryByPosition = false;
+            restartStepStartIndex = (reportSteps.front() == 0) ? 1 : 0;
+
+            if (reportSteps.back() > static_cast<int>(summarySteps)) {
+                std::ostringstream msg;
+                msg << "the parent's restart file runs to report step " << reportSteps.back()
+                    << " but its summary stops at report step " << summarySteps
+                    << ", so there is no time or summary sample to go with the "
+                       "later restart step(s).\n"
+                       "The two files are from different runs, or the summary "
+                       "was truncated.";
+                throw std::invalid_argument(msg.str());
+            }
+
+            // Worth saying: the boundary is described only where the parent
+            // wrote a restart, so a reduced run gets a coarser history than
+            // the parent's own report steps would suggest.
+            std::cout << "Note: the parent wrote "
+                      << (reportSteps.size() - restartStepStartIndex)
+                      << " restart step(s) over " << summarySteps
+                      << " report step(s), so the boundary is described at that "
+                         "cadence.\n"
+                         "      Rerun the parent with RPTRST BASIC=2 for a record "
+                         "at every report step.\n";
         }
 
         for (auto& dumper : dumpers) {
@@ -2143,7 +2185,13 @@ int run(const Options& opt)
     double previousTime = 0.0;
     for (std::size_t stepIdx = restartStepStartIndex; stepIdx < reportSteps.size(); ++stepIdx) {
         const int sourceReportStep = reportSteps[stepIdx];
-        const auto summaryStepIdx = stepIdx - restartStepStartIndex;
+
+        // Summary report step N is at index N-1 when the pairing goes by step
+        // number; by position the two sequences advance together.
+        const auto summaryStepIdx = pairSummaryByPosition
+            ? (stepIdx - restartStepStartIndex)
+            : static_cast<std::size_t>(sourceReportStep - 1);
+
         const int reportStep = summaryPayload
             ? static_cast<int>(summaryStepIdx + 1)
             : sourceReportStep;
