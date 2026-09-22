@@ -28,6 +28,11 @@
 
 namespace Opm {
 
+//! \details Numbers the region's cells in the order they appear, which is the
+//!   order a serial reduced run activates them in, so the two agree. A
+//!   parallel run does not: each rank holds an arbitrary subset of the region
+//!   under its own numbering, and its caller has to derive the mapping from
+//!   the grid instead of from the file.
 std::vector<int> FluxBoundary::buildLocalToActive(const std::vector<int>& localToGlobal)
 {
     std::vector<int> localToActive(localToGlobal.size(), -1);
@@ -61,11 +66,12 @@ FluxBoundary FluxBoundary::fromData(const EclIO::FluxFile::Data& data,
                       "FluxBoundary: boundary face references invalid interior local cell");
         }
 
+        // A face whose interior cell this rank does not hold keeps its place in
+        // the list with no active cell of its own. Dropping it would renumber
+        // everything after it, and the file's payload arrays are indexed by
+        // face position, so every rank carries the whole list whether or not it
+        // can act on a given face.
         const auto interiorActive = localToActive[face.interiorLocalCell];
-        if (interiorActive < 0) {
-            OPM_THROW(std::invalid_argument,
-                      "FluxBoundary: boundary face maps to inactive interior local cell");
-        }
 
         const auto interiorGlobal = data.localToGlobal[face.interiorLocalCell];
         if (interiorGlobal < 0) {
@@ -232,7 +238,12 @@ std::array<std::vector<int>, 6> FluxBoundary::buildDirectionalFaceIndices(const 
         if (face.isNnc || face.direction == FaceDir::Unknown) {
             continue;
         }
-        if (face.interiorActiveCell < 0 || static_cast<std::size_t>(face.interiorActiveCell) >= numActiveCells) {
+        // Not this rank's face to impose. In parallel most of the region's
+        // boundary belongs to somebody else.
+        if (face.interiorActiveCell < 0) {
+            continue;
+        }
+        if (static_cast<std::size_t>(face.interiorActiveCell) >= numActiveCells) {
             OPM_THROW(std::invalid_argument,
                       "FluxBoundary: face references invalid active cell for directional mapping");
         }
@@ -260,9 +271,10 @@ FluxBoundary::buildNncFaceIndices(const std::size_t numActiveCells) const
             continue;
         }
 
-        if (face.interiorActiveCell < 0
-            || static_cast<std::size_t>(face.interiorActiveCell) >= numActiveCells)
-        {
+        if (face.interiorActiveCell < 0) {
+            continue;
+        }
+        if (static_cast<std::size_t>(face.interiorActiveCell) >= numActiveCells) {
             OPM_THROW(std::invalid_argument,
                       "FluxBoundary: face references invalid active cell for NNC mapping");
         }

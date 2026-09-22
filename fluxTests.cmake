@@ -186,6 +186,21 @@ if (BUILD_FLOW)
           -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-fault-boundary-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_SUMMARY_BIN} ${PROJECT_BINARY_DIR}/bin/inspect_flux ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_FAULT_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_FAULT_SMOKE.DATA 1,1,5 2,1,5 I+"
       )
 
+      # A consumer must give the same answer however many ranks it runs on.
+      # The NNC sector is used because it exercises both kinds of boundary
+      # face, the axis-aligned ones and the one that arrives as a source term.
+      set(_flux_parallel_consumer_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_parallel_consumer_smoke)
+
+      opm_add_test(flux_parallel_consumer_smoke
+        EXE_TARGET
+          flow_blackoil
+        DRIVER_ARGS
+          -i ${PROJECT_SOURCE_DIR}/tests/data/sector
+          -r ${_flux_parallel_consumer_result_path}
+          -f TWOWELL_DUMPFLUX_NNC_1D
+          -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-parallel-consumer.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_SUMMARY_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_DUMPFLUX_NNC_1D.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_USEFLUX_NNC_1D.DATA 2 WBHP:P1 FPR FOPT FGPT"
+      )
+
       # Same seal, but on a K face, which a cell reaches through a different
       # slot in its boundary-face list because its I neighbours are inside the
       # sector. That is the arrangement the column case above cannot produce.

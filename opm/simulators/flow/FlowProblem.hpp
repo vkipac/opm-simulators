@@ -2092,8 +2092,21 @@ protected:
             }
         }
 
-        auto fluxBoundary = FluxBoundary::fromData(fluxData,
-                                                   FluxBoundary::buildLocalToActive(fluxData.localToGlobal));
+        // Where each of the region's cells sits in THIS rank's grid. The file
+        // numbers them in region order, which a serial run happens to activate
+        // them in, but a parallel rank holds an arbitrary subset under its own
+        // numbering and has to look each one up. Cells that belong to another
+        // rank come back as -1 and their faces are left to whoever holds them.
+        const auto& vanguard = this->simulator().vanguard();
+        std::vector<int> localToActive(fluxData.localToGlobal.size(), -1);
+        for (std::size_t local = 0; local < fluxData.localToGlobal.size(); ++local) {
+            const auto globalCell = fluxData.localToGlobal[local];
+            if (globalCell >= 0) {
+                localToActive[local] = vanguard.compressedIndex(globalCell);
+            }
+        }
+
+        auto fluxBoundary = FluxBoundary::fromData(fluxData, localToActive);
 
         const auto numElems = this->simulator().vanguard().gridView().size(/*codim=*/0);
         this->fluxBoundaryFaceIndex_.resize(numElems, 0);
@@ -2249,6 +2262,10 @@ protected:
             if (face.isNnc || face.direction == FaceDir::Unknown) {
                 continue;
             }
+
+            // Faces belonging to another rank are not this one's to account
+            // for. Counting them here would report most of the region as
+            // unmapped on every rank of a parallel run.
             if (face.interiorActiveCell < 0) {
                 continue;
             }

@@ -144,13 +144,34 @@ BOOST_AUTO_TEST_CASE(RejectsMismatchedLocalToActiveSize)
     BOOST_CHECK_THROW(Opm::FluxBoundary::fromData(data, {}), std::invalid_argument);
 }
 
-BOOST_AUTO_TEST_CASE(RejectsInactiveBoundaryInteriorCell)
+BOOST_AUTO_TEST_CASE(KeepsBoundaryFaceWhoseInteriorCellIsElsewhere)
 {
+    // In parallel a rank holds only part of the region, so most of the
+    // boundary belongs to somebody else. Such a face keeps its place in the
+    // list, because the file's payload arrays are indexed by face position and
+    // dropping one would renumber every face after it. It carries no active
+    // cell, and the lookups a rank uses to impose a boundary pass over it.
     Opm::EclIO::FluxFile::Data data;
-    data.localToGlobal = {10};
-    data.boundaryFaces = {{0, static_cast<int>(Opm::FaceDir::XMinus), 9, 0.0}};
+    data.localToGlobal = {10, 11};
+    data.boundaryFaces = {
+        {0, static_cast<int>(Opm::FaceDir::XMinus), 9, 1.5},
+        {1, static_cast<int>(Opm::FaceDir::XPlus), 12, 2.5},
+    };
 
-    BOOST_CHECK_THROW(Opm::FluxBoundary::fromData(data, {-1}), std::invalid_argument);
+    // The first cell is on another rank; only the second is here.
+    const auto boundary = Opm::FluxBoundary::fromData(data, {-1, 0});
+
+    BOOST_REQUIRE_EQUAL(boundary.faces().size(), 2U);
+    BOOST_CHECK_EQUAL(boundary.faces()[0].interiorActiveCell, -1);
+    BOOST_CHECK_EQUAL(boundary.faces()[1].interiorActiveCell, 0);
+
+    // Face positions are unchanged, so the second face still resolves to slot
+    // 2 and indexes the second entry of every payload array. The direction
+    // arrays are keyed as elsewhere in the flux code, by the bit position of
+    // the direction: 0 is I+ and 1 is I-.
+    const auto directional = boundary.buildDirectionalFaceIndices(1);
+    BOOST_CHECK_EQUAL(directional[0][0], 2);
+    BOOST_CHECK_EQUAL(directional[1][0], 0);
 }
 
 BOOST_AUTO_TEST_CASE(BuildsDirectionalFaceIndexRegistration)
