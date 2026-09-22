@@ -1137,12 +1137,12 @@ updateSummaryRegionValues(const Inplace& inplace,
                                         true);
         }
 
-        if (this->summaryConfig_.hasKeyword("FPR2")) {
+        if (this->summaryConfig_.hasKeyword("FPRFLUX")) {
             // Same average as FPR, but over the whole of the original model.
             // A reduced run adds the sums its parent recorded for the cells it
-            // does not have; everything else leaves them at zero, and FPR2 is
-            // then identical to FPR.
-            miscSummaryData["FPR2"] =
+            // does not have; everything else leaves them at zero, and FPRFLUX
+            // is then identical to FPR.
+            miscSummaryData["FPRFLUX"] =
                 detail::pressureAverage(inplace.get(Inplace::Phase::PressureHydroCarbonPV)
                                         + this->externalRegionSums_[0],
                                         inplace.get(Inplace::Phase::HydroCarbonPV)

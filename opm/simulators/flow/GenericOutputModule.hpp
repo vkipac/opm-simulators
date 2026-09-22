@@ -165,7 +165,7 @@ public:
     void outputErrorLog(const Parallel::Communication& comm) const;
 
     //! \brief Supply pore-volume weighted sums for cells this run does not
-    //!        have, so that FPR2 can average over the whole original model.
+    //!        have, so that FPRFLUX can average over the whole original model.
     //!
     //! \param[in] sums Sixteen values in the layout of
     //!   FluxFile::ReportStep::externalRegionSums.
@@ -648,7 +648,7 @@ protected:
     //!
     //! \details Sixteen values in the layout of
     //!   FluxFile::ReportStep::externalRegionSums. Zero unless a USEFLUX run
-    //!   supplies them, in which case FPR2 averages over the whole of the
+    //!   supplies them, in which case FPRFLUX averages over the whole of the
     //!   model the sector came from rather than over the sector alone.
     std::array<Scalar, 16> externalRegionSums_{};
 

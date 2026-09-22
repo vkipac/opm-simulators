@@ -316,9 +316,9 @@ public:
         const auto localWellTestState = simulator_.problem().wellModel().wellTestState();
         this->prepareLocalCellData(isSubStep, reportStepNum);
 
-        // A sector run reports FPR over its own cells. FPR2 covers the whole of
-        // the model the sector came from, using the sums its parent recorded
-        // for everything outside.
+        // A sector run reports FPR over its own cells. FPRFLUX covers the
+        // whole of the model the sector came from, using the sums its parent
+        // recorded for everything outside.
         {
             std::array<Scalar, 8> hydrocarbonPvWeighted{};
             std::array<Scalar, 8> poreVolumeWeighted{};

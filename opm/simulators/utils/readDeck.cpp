@@ -454,12 +454,12 @@ namespace {
         }
 
         if (eclipseState->getIOConfig().getUseFlux()) {
-            // A sector run's FPR covers its own cells only. FPR2 is the same
-            // average taken over the whole of the model the sector came from,
-            // which is what the wells see when a reservoir-volume target is
-            // converted. It is always present, because a sector run cannot
+            // A sector run's FPR covers its own cells only. FPRFLUX is the
+            // same average taken over the whole of the model the sector came
+            // from, which is what the wells see when a reservoir-volume target
+            // is converted. It is always present, because a sector run cannot
             // report a field average any other way.
-            summaryConfig->addFieldKeyword("FPR2");
+            summaryConfig->addFieldKeyword("FPRFLUX");
         }
 
         Opm::checkConsistentArrayDimensions(*eclipseState, *schedule,
