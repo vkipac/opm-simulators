@@ -44,12 +44,17 @@ carried_keys() {
 # FLUXALL has to reach the object as well as the keyword: naming every well for
 # WBHP, every group for GEFF, and -- the one that takes the most work to get
 # right -- every region of the FIPNUM set for RPR.
-for key in "WBHP:P1" "WBHP:P2" "GEFF:G1" "RPR:1" "RPR:2"; do
+#
+# The two user defined quantities have to be carried in their own right as
+# well. WUFOUR because the ACTIONX compares against it, and WUTWICE because
+# WUFOUR is defined in terms of it: a reduced run can only recompute a UDQ
+# whose inputs it still has.
+for key in "WBHP:P1" "WBHP:P2" "GEFF:G1" "RPR:1" "RPR:2" "WUTWICE:P1" "WUTWICE:P2" "WUFOUR:P1" "WUFOUR:P2"; do
     if ! carried_keys | grep -qx "$key"; then
         echo "check-make-flux-fluxall: $key is referred to by the deck's expressions," \
              "but FLUXALL did not put it in the parent summary" >&2
         echo "carried:" >&2
-        carried_keys | grep -E "^(WBHP|GEFF|RPR)" >&2 || true
+        carried_keys | grep -E "^(WBHP|GEFF|RPR|WUTWICE|WUFOUR)" >&2 || true
         exit 1
     fi
 done

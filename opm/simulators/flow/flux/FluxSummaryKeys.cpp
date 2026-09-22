@@ -69,6 +69,12 @@ std::vector<std::string> fluxSummaryKeywords(const Schedule& schedule,
     // in the reduced run.
     for (const auto& udq : schedule.unique<UDQConfig>()) {
         udq.second.required_summary(keywords);
+
+        // A definition's requirements stop at the summary vectors it reads;
+        // the UDQs it reads are filtered out, on the grounds that the run
+        // computes those. It can only compute one whose inputs it still has,
+        // though, and an ASSIGN has no inputs at all, so carry them too.
+        udq.second.requiredUDQs(keywords);
     }
 
     for (const auto& action : schedule.back().actions.get()) {

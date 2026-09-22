@@ -174,8 +174,9 @@ PRESSURE
 SUMMARY
 
 -- The point of the case: not one vector is named here. FLUXALL is expected to
--- work out that the UDQ wants WBHP and that the ACTIONX wants GEFF and RPR,
--- and to report them for every well, group and region there is.
+-- work out that the UDQs want WBHP, that the ACTIONX wants GEFF and RPR, and
+-- that both user defined quantities have to be reported in their own right,
+-- and to cover every well, group and region there is.
 FLUXALL
 
 SCHEDULE
@@ -195,16 +196,23 @@ WCONPROD
   'P2' 'OPEN' 'ORAT' 0.1 4* 250.0 /
 /
 
--- Refers to WBHP, a well keyword.
+-- WUTWICE refers to WBHP, a well keyword. WUFOUR refers to WUTWICE, which is
+-- not a summary keyword at all but another user defined quantity, and
+-- UDQDefine::required_summary() drops it for that reason.
 UDQ
   DEFINE WUTWICE WBHP * 2 /
+  UNITS  WUTWICE BARSA /
+  DEFINE WUFOUR WUTWICE * 2 /
+  UNITS  WUFOUR BARSA /
 /
 
--- Refers to GEFF, a group keyword, and to RPR, a region one.
+-- Refers to GEFF, a group keyword, to RPR, a region one, and to WUFOUR, which
+-- reaches the rest of the chain.
 ACTIONX
   ACT1  10  1 /
-  GEFF  'G1'  > 0.5 AND /
-  RPR   1     > 1.0 /
+  GEFF  'G1'   > 0.5 AND /
+  RPR   1      > 1.0 AND /
+  WUFOUR 'P1'  > 0.0 /
 /
 
 WELOPEN
