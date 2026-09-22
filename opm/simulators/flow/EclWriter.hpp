@@ -632,9 +632,13 @@ public:
             this->outputModule_->assignGlobalFieldsToSolution(localCellData);
         }
 
-        if (this->collectOnIORank_.isIORank()) {
-            this->updateFluxDumpers_(reportStepNum, isSubStep);
+        // Every rank takes part: a rank can only report on the cells it holds,
+        // so forming a boundary record is collective even though only the IO
+        // rank keeps one. Placed after the collect() above, which is what makes
+        // the gathered NNC fluxes available to it.
+        this->updateFluxDumpers_(reportStepNum, isSubStep);
 
+        if (this->collectOnIORank_.isIORank()) {
             const Scalar curTime = simulator_.time() + simulator_.timeStepSize();
             const Scalar nextStepSize = simulator_.problem().nextTimeStepSize();
             std::optional<int> timeStepIdx;
@@ -706,7 +710,7 @@ public:
     //!          buffers - is not tied to the restart output cadence.
     void sampleFluxDumperRates(const Scalar dt)
     {
-        if (this->fluxDumpers_.empty() || !this->collectOnIORank_.isIORank()) {
+        if (this->fluxDumpers_.empty()) {
             return;
         }
 
@@ -780,6 +784,14 @@ public:
                                               const EclIO::FluxFile::Phase phase) -> double
         {
             if (face.isNnc || face.direction == FaceDir::Unknown) {
+                return 0.0;
+            }
+
+            // The face is this rank's to report only if it owns the interior
+            // cell. Every rank that merely holds a copy leaves it at zero, so
+            // that the sum taken when the record is formed counts it once.
+            const auto& vg = this->simulator_.vanguard();
+            if (!this->fluxCellOwned_(vg.compressedIndex(face.interiorGlobalCell))) {
                 return 0.0;
             }
 
@@ -1578,15 +1590,24 @@ private:
         return offenders;
     }
 
+    //! \brief Set up one dumper per FLUXNUM region, on every rank.
+    //!
+    //! \details A rank can only report on the cells it holds, so every rank
+    //!   has to take part in filling a boundary record even though only the IO
+    //!   rank keeps one. Leaving the dumpers on the IO rank alone left it
+    //!   writing zero for every face outside its own partition.
+    //!
+    //!   The region is a pure function of the deck, so each rank could work it
+    //!   out for itself were the inputs at hand. They are not: FLUXNUM and
+    //!   ACTNUM live in the global field properties, which only the root rank
+    //!   may read. They are broadcast instead, and every rank then runs the
+    //!   same extraction and arrives at the same region.
     void initializeFluxDumpers_()
     {
-        if (!this->collectOnIORank_.isIORank()) {
-            return;
-        }
-
         const auto& state = this->eclState();
-        const auto& fieldProps = state.globalFieldProps();
         const auto& io = state.getIOConfig();
+        const auto& comm = this->simulator_.vanguard().grid().comm();
+        const bool isRoot = this->collectOnIORank_.isIORank();
 
         // USEFLUX consumer decks now also carry FLUXNUM as the region map, so
         // FLUXNUM alone no longer means "this run should dump FLUX files".
@@ -1595,51 +1616,78 @@ private:
             return;
         }
 
-        if (!fieldProps.has_int("FLUXNUM")) {
-            return;
-        }
+        const auto dims = state.gridDims().getNXYZ();
+        const auto numGlobalCells =
+            static_cast<int>(static_cast<std::size_t>(dims[0]) * dims[1] * dims[2]);
 
         // FLUXNUM is dimensioned over every cell of the grid, active or not,
         // so it has to be read with the global accessor rather than the one
-        // that returns a value per active cell. ACTNUM is passed alongside it
-        // so that inactive cells are kept out of the region.
-        const auto regionValues = fieldProps.get_global_int("FLUXNUM");
-        const auto& actnum = fieldProps.actnumRaw();
-        const auto dims = state.gridDims().getNXYZ();
+        // that returns a value per active cell. ACTNUM goes alongside it so
+        // that inactive cells are kept out of the region.
+        std::vector<int> regionValues;
+        std::vector<int> actnum;
+        std::vector<int> nncPairs;
+        int haveFluxnum = 0;
 
-        std::vector<std::array<int, 2>> nncConnections;
-        this->fluxNncPairToIndex_.clear();
-        int nncIndex = 0;
-        if (state.hasInputNNC()) {
-            const auto& inputNnc = state.getInputNNC().input();
-            nncConnections.reserve(inputNnc.size());
-            for (const auto& nnc : inputNnc) {
-                nncConnections.push_back({
-                    static_cast<int>(nnc.cell1),
-                    static_cast<int>(nnc.cell2),
-                });
+        if (isRoot) {
+            const auto& fieldProps = state.globalFieldProps();
+            haveFluxnum = fieldProps.has_int("FLUXNUM") ? 1 : 0;
 
-                const auto key = normalizedNncPair_(static_cast<int>(nnc.cell1),
-                                                    static_cast<int>(nnc.cell2));
-                this->fluxNncPairToIndex_.try_emplace(key, nncIndex);
-                ++nncIndex;
+            if (haveFluxnum != 0) {
+                regionValues = fieldProps.get_global_int("FLUXNUM");
+                actnum = fieldProps.actnumRaw();
+
+                const auto appendNnc = [&nncPairs](const auto& connections)
+                {
+                    for (const auto& nnc : connections) {
+                        nncPairs.push_back(static_cast<int>(nnc.cell1));
+                        nncPairs.push_back(static_cast<int>(nnc.cell2));
+                    }
+                };
+
+                if (state.hasInputNNC()) {
+                    appendNnc(state.getInputNNC().input());
+                }
+                if (state.hasPinchNNC()) {
+                    appendNnc(state.getPinchNNC());
+                }
             }
         }
 
-        if (state.hasPinchNNC()) {
-            const auto& pinchNnc = state.getPinchNNC();
-            nncConnections.reserve(nncConnections.size() + pinchNnc.size());
-            for (const auto& nnc : pinchNnc) {
-                nncConnections.push_back({
-                    static_cast<int>(nnc.cell1),
-                    static_cast<int>(nnc.cell2),
-                });
+        comm.broadcast(&haveFluxnum, 1, 0);
+        if (haveFluxnum == 0) {
+            return;
+        }
 
-                const auto key = normalizedNncPair_(static_cast<int>(nnc.cell1),
-                                                    static_cast<int>(nnc.cell2));
-                this->fluxNncPairToIndex_.try_emplace(key, nncIndex);
-                ++nncIndex;
+        const auto share = [&comm, isRoot](std::vector<int>& values)
+        {
+            int size = isRoot ? static_cast<int>(values.size()) : 0;
+            comm.broadcast(&size, 1, 0);
+            if (!isRoot) {
+                values.assign(static_cast<std::size_t>(size), 0);
             }
+            if (size > 0) {
+                comm.broadcast(values.data(), size, 0);
+            }
+        };
+
+        share(regionValues);
+        share(actnum);
+        share(nncPairs);
+
+        if (static_cast<int>(regionValues.size()) != numGlobalCells) {
+            return;
+        }
+
+        std::vector<std::array<int, 2>> nncConnections;
+        this->fluxNncPairToIndex_.clear();
+        nncConnections.reserve(nncPairs.size() / 2);
+        for (std::size_t n = 0; n + 1 < nncPairs.size(); n += 2) {
+            const auto cell1 = nncPairs[n];
+            const auto cell2 = nncPairs[n + 1];
+            nncConnections.push_back({cell1, cell2});
+            this->fluxNncPairToIndex_.try_emplace(normalizedNncPair_(cell1, cell2),
+                                                  static_cast<int>(n / 2));
         }
 
         const auto regions = FluxRegions::extract(dims, regionValues, actnum, nncConnections);
@@ -1682,7 +1730,57 @@ private:
                      + std::to_string(this->fluxDumpers_.size())
                  + " region dumper(s) from FLUXNUM");
 
+        this->buildFluxOwnedCells_();
         this->initializeFluxSummarySampling_();
+    }
+
+    //! \brief Mark the cells this rank is the owner of.
+    //!
+    //! \details A cell shows up on more than one rank, once as an interior
+    //!   cell and again in the overlap of whoever borders it. A per-cell
+    //!   quantity summed across ranks therefore has to be contributed by
+    //!   exactly one of them, and the interior partition picks that one. Taking
+    //!   a maximum instead would avoid the double count for a positive
+    //!   quantity, but not for capillary pressure, which is signed.
+    void buildFluxOwnedCells_()
+    {
+        this->fluxOwnedCell_.clear();
+
+        if (this->fluxDumpers_.empty()) {
+            return;
+        }
+
+        const auto& gridView = this->simulator_.vanguard().gridView();
+        const auto& mapper = this->simulator_.model().elementMapper();
+
+        this->fluxOwnedCell_.assign(gridView.size(/*codim=*/0), 0);
+        for (const auto& elem : elements(gridView)) {
+            if (elem.partitionType() == Dune::InteriorEntity) {
+                this->fluxOwnedCell_[mapper.index(elem)] = 1;
+            }
+        }
+    }
+
+    //! \brief Whether this rank is the one that should report on a cell.
+    bool fluxCellOwned_(const int compressedCell) const
+    {
+        return (compressedCell >= 0)
+            && (static_cast<std::size_t>(compressedCell) < this->fluxOwnedCell_.size())
+            && (this->fluxOwnedCell_[compressedCell] != 0);
+    }
+
+    //! \brief Gather a per-face or per-region quantity from all ranks.
+    //!
+    //! \details Every rank has filled the entries it owns and left the rest at
+    //!   zero, so a sum collects them. Collective, hence called from the same
+    //!   place on every rank.
+    template <typename T>
+    void fluxReduceSum_(std::vector<T>& values) const
+    {
+        const auto& comm = this->simulator_.vanguard().grid().comm();
+        if ((comm.size() > 1) && !values.empty()) {
+            comm.sum(values.data(), values.size());
+        }
     }
 
     // Establish the fixed set of parent summary vectors embedded in the .FLUX
@@ -1762,7 +1860,7 @@ private:
     {
         this->fluxCapturedFaceRates_.clear();
 
-        if (this->fluxDumpers_.empty() || !this->collectOnIORank_.isIORank()) {
+        if (this->fluxDumpers_.empty()) {
             return;
         }
 
@@ -1782,7 +1880,30 @@ private:
                     return 0.0;
                 }
 
+                const auto& vg = this->simulator_.vanguard();
+
+                // Reported by whoever owns the interior cell, once.
+                if (!this->fluxCellOwned_(vg.compressedIndex(face.interiorGlobalCell))) {
+                    return 0.0;
+                }
+
                 const auto comp = this->fluxComponentIndex_(phase);
+
+                // The FLORES buffers are indexed by this rank's own cell
+                // numbering, not by cartesian position, so the cartesian index
+                // a face carries has to be translated first. Handing the
+                // cartesian one straight over reads a different cell entirely
+                // as soon as the grid has an inactive cell before this one.
+                const auto floresAt = [&flows, &vg, comp](const int globalCell,
+                                                          const FaceDir::DirEnum dir)
+                {
+                    const auto cell = vg.compressedIndex(globalCell);
+                    if (cell < 0) {
+                        return 0.0;
+                    }
+
+                    return flows.getFloresIfAvailable(static_cast<unsigned>(cell), dir, comp);
+                };
 
                 // FLORES is stored per cell for the positive face
                 // directions only, and is oriented along the positive
@@ -1798,24 +1919,16 @@ private:
                 case FaceDir::XPlus:
                 case FaceDir::YPlus:
                 case FaceDir::ZPlus:
-                    return -flows.getFloresIfAvailable(face.interiorGlobalCell,
-                                                       face.direction,
-                                                       comp);
+                    return -floresAt(face.interiorGlobalCell, face.direction);
 
                 case FaceDir::XMinus:
-                    return flows.getFloresIfAvailable(face.exteriorGlobalCell,
-                                                      FaceDir::XPlus,
-                                                      comp);
+                    return floresAt(face.exteriorGlobalCell, FaceDir::XPlus);
 
                 case FaceDir::YMinus:
-                    return flows.getFloresIfAvailable(face.exteriorGlobalCell,
-                                                      FaceDir::YPlus,
-                                                      comp);
+                    return floresAt(face.exteriorGlobalCell, FaceDir::YPlus);
 
                 case FaceDir::ZMinus:
-                    return flows.getFloresIfAvailable(face.exteriorGlobalCell,
-                                                      FaceDir::ZPlus,
-                                                      comp);
+                    return floresAt(face.exteriorGlobalCell, FaceDir::ZPlus);
 
                 default:
                     return 0.0;
@@ -1860,7 +1973,10 @@ private:
 
         for (std::size_t f = 0; f < faces.size(); ++f) {
             const auto cell = vanguard.compressedIndex(faces[f].exteriorGlobalCell);
-            if (cell < 0) {
+
+            // Reported by the rank that owns the cell and nobody else, so that
+            // the caller's sum across ranks picks each face up once.
+            if (!this->fluxCellOwned_(cell)) {
                 continue;
             }
 
@@ -1931,6 +2047,13 @@ private:
 
         for (std::size_t cell = 0; cell < inRegion.size(); ++cell) {
             if (inRegion[cell] != 0) {
+                continue;
+            }
+
+            // Counted by the rank that owns the cell and nobody else. An
+            // overlap copy would otherwise add the same pore volume again on
+            // every rank that borders it, and these are sums, not averages.
+            if (!this->fluxCellOwned_(static_cast<int>(cell))) {
                 continue;
             }
 
@@ -2006,14 +2129,14 @@ private:
                 const auto interior = vanguard.compressedIndex(face.interiorGlobalCell);
                 const auto exterior = vanguard.compressedIndex(face.exteriorGlobalCell);
                 if (interior < 0 || exterior < 0) {
-                    // FIXME: in parallel the dumpers live on the IO rank alone,
-                    // which owns only its own partition, so every face outside
-                    // it silently keeps a zero transmissibility here. The fix
-                    // needs the face list on all ranks and a reduction onto the
-                    // writer, which the current IO-rank-only structure of this
-                    // class does not allow. Until then a FLUX file written in
-                    // parallel carries zero transmissibilities and a consumer
-                    // falls back on its outer-boundary default.
+                    continue;
+                }
+
+                // The face belongs to whoever owns its interior cell, so that
+                // exactly one rank contributes it to the sum below. The
+                // exterior cell need only be reachable, which it is: it borders
+                // an owned cell and so sits in this rank's overlap.
+                if (!this->fluxCellOwned_(interior)) {
                     continue;
                 }
 
@@ -2026,6 +2149,9 @@ private:
 
                 pvtRegion[i] = problem.pvtRegionIndex(static_cast<unsigned>(exterior));
             }
+
+            this->fluxReduceSum_(trans);
+            this->fluxReduceSum_(pvtRegion);
 
             dumper.setBoundaryTransmissibilities(trans);
             dumper.setBoundaryExteriorPvtRegions(pvtRegion);
@@ -2238,7 +2364,11 @@ private:
 
                 for (const auto& face : faces) {
                     const auto compressedExterior = vanguard.compressedIndex(face.exteriorGlobalCell);
-                    if (compressedExterior < 0) {
+
+                    // Only the rank that owns the exterior cell reports it, so
+                    // that the sum below picks the value up exactly once.
+                    // Everyone else leaves zeroes in its place.
+                    if (!this->fluxCellOwned_(compressedExterior)) {
                         step.pressures.push_back(0.0);
                         if (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)) {
                             step.swat.push_back(0.0);
@@ -2270,14 +2400,31 @@ private:
                 // wrong SATNUM region, the wrong scaled end points and none of
                 // this run's hysteresis history.
                 this->collectFluxExteriorRockState_(dumper, step);
+
+                // Each rank has filled only the faces whose exterior cell it
+                // owns, so collect them. Collective, and reached by every rank
+                // because the dumpers exist everywhere.
+                this->fluxReduceSum_(step.pressures);
+                this->fluxReduceSum_(step.swat);
+                this->fluxReduceSum_(step.sgas);
+                this->fluxReduceSum_(step.rs);
+                this->fluxReduceSum_(step.rv);
+                this->fluxReduceSum_(step.relPerm);
+                this->fluxReduceSum_(step.capPressure);
             }
 
             // Written in both modes: a reduced run needs these whatever kind of
             // boundary it uses, because the averages they rebuild drive the
             // wells, not the boundary.
             this->collectFluxConverterExternal_(dumper, step);
+            this->fluxReduceSum_(step.externalRegionSums);
+            this->fluxReduceSum_(step.massRates);
 
-            dumper.appendReportStep(step);
+            // Only the writer keeps the record. The others took part purely to
+            // report on the cells they own.
+            if (this->collectOnIORank_.isIORank()) {
+                dumper.appendReportStep(step);
+            }
         }
 
         // Start a fresh accumulation window for the next record.
@@ -2298,6 +2445,14 @@ private:
 
     void flushFluxDumpers_()
     {
+        // One writer only. Every rank holds a dumper so that it can report on
+        // its own cells, but the records were gathered onto the IO rank and it
+        // is the only one with a file to add them to. Letting the others in
+        // here has them all appending to the same path.
+        if (!this->collectOnIORank_.isIORank()) {
+            return;
+        }
+
         for (std::size_t i = 0; i < this->fluxDumpers_.size(); ++i) {
             this->fluxDumpers_[i].flush(this->fluxOutputPaths_[i], /*formatted=*/false);
         }
@@ -2480,6 +2635,10 @@ private:
     //!        disagreeing with the assembled residual.
     bool fluxMassMismatchReported_ = false;
     bool fluxTransmissibilitiesAssigned_ = false;
+
+    //! \brief Whether this rank owns each local cell, i.e. holds it as an
+    //!        interior cell rather than as an overlap copy.
+    std::vector<char> fluxOwnedCell_;
 };
 
 } // namespace Opm

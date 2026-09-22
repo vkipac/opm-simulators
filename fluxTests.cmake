@@ -147,7 +147,7 @@ if (BUILD_FLOW)
       -r ${_make_flux_pressure_equivalence_mpi_result_path}
       -f FLUX_DUMP_PRESSURE_SMOKE
       -n 2
-      -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-equivalence-smoke.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_PRESSURE_SMOKE.DATA FLUX_DUMP_PRESSURE_SMOKE pressure 10 --compare-arg=--ignore-pressures --compare-arg=--ignore-transmissibilities"
+      -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-equivalence-smoke.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_PRESSURE_SMOKE.DATA FLUX_DUMP_PRESSURE_SMOKE pressure 10"
   )
 
     set(_make_flux_fluxnum_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+make_flux_fluxnum_smoke)
@@ -202,6 +202,24 @@ if (BUILD_FLOW)
       )
     endif()
 
+    # A FLUX file must come out the same however many ranks wrote it. Covered
+    # for both payloads: pressure mode carries the exterior state and the
+    # region sums, flux mode the component masses.
+    foreach(_flux_par_case FLUX_DUMP_PRESSURE_SMOKE FLUX_DUMP_FLORES_SMOKE)
+      string(TOLOWER ${_flux_par_case} _flux_par_lower)
+      set(_flux_par_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_parallel_${_flux_par_lower})
+
+      opm_add_test(flux_parallel_${_flux_par_lower}
+        EXE_TARGET
+          flow_blackoil
+        DRIVER_ARGS
+          -i ${PROJECT_SOURCE_DIR}/tests/flux
+          -r ${_flux_par_result_path}
+          -f ${_flux_par_case}
+          -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-parallel-consistency.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_SOURCE_DIR}/tests/flux/${_flux_par_case}.DATA 3"
+      )
+    endforeach()
+
     set(_flux_minpv_boundary_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_minpv_boundary_smoke)
 
     opm_add_test(flux_minpv_boundary_smoke
@@ -242,7 +260,7 @@ if (BUILD_FLOW)
         -r ${_make_flux_flux_equivalence_mpi_result_path}
         -f FLUX_DUMP_FLORES_SMOKE
         -n 2
-        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-equivalence-smoke.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_FLORES_SMOKE.DATA FLUX_DUMP_FLORES_SMOKE flux 0 --compare-arg=--ignore-transmissibilities"
+        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-make-flux-equivalence-smoke.sh ${PROJECT_BINARY_DIR}/bin/make_flux ${PROJECT_BINARY_DIR}/bin/flux_smoke_compare ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_FLORES_SMOKE.DATA FLUX_DUMP_FLORES_SMOKE flux 0"
     )
 
   set(_make_flux_pressure_sector_regression_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+make_flux_pressure_sector_regression_smoke)

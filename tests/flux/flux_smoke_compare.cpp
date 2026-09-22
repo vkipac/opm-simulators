@@ -110,7 +110,6 @@ int main(int argc, char** argv)
 {
     bool ignorePressures = false;
     bool ignoreTimes = false;
-    bool ignoreTransmissibilities = false;
     for (int i = 3; i < argc; ++i) {
         const std::string arg{argv[i]};
         if (arg == "--ignore-pressures") {
@@ -121,23 +120,14 @@ int main(int argc, char** argv)
             ignoreTimes = true;
             continue;
         }
-        // Only for comparing against a file a PARALLEL run produced. The
-        // dumpers live on the IO rank alone, so it can only reach the faces of
-        // its own partition and writes zero for the rest. See the FIXME in
-        // EclWriter::assignFluxDumperTransmissibilities_(). Do not reach for
-        // this to make a serial comparison pass.
-        if (arg == "--ignore-transmissibilities") {
-            ignoreTransmissibilities = true;
-            continue;
-        }
 
         return fail("usage: flux_smoke_compare <expected.FLUX> <actual.FLUX>"
-                    " [--ignore-pressures] [--ignore-times] [--ignore-transmissibilities]");
+                    " [--ignore-pressures] [--ignore-times]");
     }
 
     if (argc < 3) {
         return fail("usage: flux_smoke_compare <expected.FLUX> <actual.FLUX>"
-                    " [--ignore-pressures] [--ignore-times] [--ignore-transmissibilities]");
+                    " [--ignore-pressures] [--ignore-times]");
     }
 
     const auto expected = Opm::EclIO::FluxFile::read(argv[1]);
@@ -214,13 +204,10 @@ int main(int argc, char** argv)
         // A tool that rebuilds the boundary from a parent's INIT file reads
         // single-precision transmissibilities where the simulator had doubles,
         // so allow for that but nothing looser.
-        const bool transmissibilityMatch = ignoreTransmissibilities
-            || relativelyClose(lhs.transmissibility, rhs.transmissibility, 1e-6);
-
         if (lhs.interiorLocalCell != rhs.interiorLocalCell
             || lhs.direction != rhs.direction
             || lhs.exteriorGlobalCell != rhs.exteriorGlobalCell
-            || !transmissibilityMatch) {
+            || !relativelyClose(lhs.transmissibility, rhs.transmissibility, 1e-6)) {
             std::cerr << "boundary face mismatch at index " << i << ":\n"
                       << "  interiorLocalCell: " << lhs.interiorLocalCell << " vs " << rhs.interiorLocalCell << '\n'
                       << "  direction: " << lhs.direction << " vs " << rhs.direction << '\n'
