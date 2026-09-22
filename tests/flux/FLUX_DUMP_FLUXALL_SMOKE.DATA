@@ -199,11 +199,15 @@ WCONPROD
 -- WUTWICE refers to WBHP, a well keyword. WUFOUR refers to WUTWICE, which is
 -- not a summary keyword at all but another user defined quantity, and
 -- UDQDefine::required_summary() drops it for that reason.
+--
+-- WUFOUR is also left without a UNITS entry on purpose. That is no reason to
+-- withhold the vector: the summary writer emits an empty unit string for a
+-- UDQ that has none, the same as it would if the deck had named WUFOUR in its
+-- SUMMARY section outright.
 UDQ
   DEFINE WUTWICE WBHP * 2 /
   UNITS  WUTWICE BARSA /
   DEFINE WUFOUR WUTWICE * 2 /
-  UNITS  WUFOUR BARSA /
 /
 
 -- Refers to GEFF, a group keyword, to RPR, a region one, and to WUFOUR, which
