@@ -23,6 +23,7 @@
 
 #include <opm/input/eclipse/Schedule/Action/ActionX.hpp>
 #include <opm/input/eclipse/Schedule/Action/Actions.hpp>
+#include <opm/input/eclipse/Schedule/RequisiteSummaryVector.hpp>
 #include <opm/input/eclipse/Schedule/Schedule.hpp>
 #include <opm/input/eclipse/Schedule/UDQ/UDQConfig.hpp>
 
@@ -101,9 +102,11 @@ std::string_view fluxSummaryKeywordOf(std::string_view key)
 std::vector<std::string> fluxSummaryKeys(const Schedule& schedule,
                                          const bool oil,
                                          const bool water,
-                                         const bool gas)
+                                         const bool gas,
+                                         const std::vector<std::string>& availableKeys)
 {
     const auto keywords = fluxSummaryKeywords(schedule, oil, water, gas);
+    const auto wanted = std::unordered_set<std::string>(keywords.begin(), keywords.end());
 
     // The keywords are bare, so expand the well and group level ones over the
     // objects they can apply to.
@@ -134,12 +137,73 @@ std::vector<std::string> fluxSummaryKeys(const Schedule& schedule,
 
         default:
             // Region, block, connection, segment, aquifer and node level
-            // quantities name an object this function has no way to enumerate.
-            // A caller with the parent's own key list in hand should match on
-            // fluxSummaryKeywords() rather than on this expansion, which is
-            // what make_flux does.
+            // quantities name an object the schedule cannot enumerate: nothing
+            // in it says which regions of which region set the run reports on.
+            // They are picked out of availableKeys below instead.
             break;
         }
+    }
+
+    // Whatever the run itself holds under a wanted keyword. This is the only
+    // way the categories above can be reached, and leaving them out is not the
+    // harmless omission it looks: a reduced run evaluating an ACTIONX that
+    // names RPR__REC:3 aborts with
+    //
+    //   Summary vector RPR__REC:3 is unknown
+    //
+    // and no indication that the vector should have come from the parent.
+    for (const auto& key : availableKeys) {
+        switch (EclIO::SummaryNode::category_from_keyword(key)) {
+        case EclIO::SummaryNode::Category::Well:
+        case EclIO::SummaryNode::Category::Group:
+        case EclIO::SummaryNode::Category::Field:
+        case EclIO::SummaryNode::Category::Miscellaneous:
+            // Already covered by the expansion above, which does not depend on
+            // the run having got far enough to hold a value yet.
+            continue;
+
+        default:
+            break;
+        }
+
+        if (wanted.count(std::string{fluxSummaryKeywordOf(key)}) != 0) {
+            keys.push_back(key);
+        }
+    }
+
+    // And whatever the deck's expressions name outright. A condition on
+    // RPR__REC:3 is answered by the parent whether or not its SUMMARY section
+    // ever mentioned region 3, so the key can be absent from availableKeys and
+    // still be needed.
+    auto named = RequisiteSummaryVectors{};
+    for (const auto& udq : schedule.unique<UDQConfig>()) {
+        udq.second.requisiteSummaryVectors(named);
+    }
+    for (const auto& action : schedule.back().actions.get()) {
+        action.requisiteSummaryVectors(named);
+    }
+
+    for (const auto& vector : named) {
+        switch (EclIO::SummaryNode::category_from_keyword(vector.keyword)) {
+        case EclIO::SummaryNode::Category::Region:
+        case EclIO::SummaryNode::Category::Segment:
+        case EclIO::SummaryNode::Category::Node:
+            break;
+
+        default:
+            // Wells and groups are expanded above. A block or connection names
+            // its cell by I, J and K while the summary names it by global
+            // index, so the two spellings cannot be reconciled here.
+            continue;
+        }
+
+        auto key = vector.keyword;
+        for (const auto& argument : vector.arguments) {
+            key += ':';
+            key += argument;
+        }
+
+        keys.push_back(std::move(key));
     }
 
     std::sort(keys.begin(), keys.end());

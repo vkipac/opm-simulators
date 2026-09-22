@@ -59,21 +59,28 @@ std::vector<std::string> fluxSummaryKeywords(const Schedule& schedule,
 /// parent's summary instead would be both wasteful and unpredictable, since it
 /// would depend on what the parent happened to ask for in its SUMMARY section.
 ///
-/// Only the keywords that can be enumerated from the schedule are expanded,
-/// which means the well, group, field and miscellaneous ones. A caller holding
-/// the parent's actual key list should match on fluxSummaryKeywords() instead,
-/// which covers every category.
+/// Well, group, field and miscellaneous keywords are expanded over the objects
+/// the schedule can enumerate. Region, block, connection, segment, aquifer and
+/// node quantities cannot be reached that way -- nothing in the schedule says
+/// which regions of which region set the run reports on -- so those are taken
+/// from \p availableKeys instead.
 ///
 /// \param[in] schedule Parent run's schedule, for the UDQ and ACTIONX
 ///    definitions and for the wells and groups the bare keywords expand over.
 ///
 /// \param[in] oil,water,gas Which phases are active.
 ///
+/// \param[in] availableKeys Summary keys the run itself holds, typically the
+///    contents of its SummaryState. Only consulted for the categories the
+///    schedule cannot enumerate. Pass an empty list to expand nothing beyond
+///    the wells and groups.
+///
 /// \return Fully qualified keys, sorted and deduplicated.
 std::vector<std::string> fluxSummaryKeys(const Schedule& schedule,
                                          bool oil,
                                          bool water,
-                                         bool gas);
+                                         bool gas,
+                                         const std::vector<std::string>& availableKeys);
 
 /// The keyword part of a summary key, i.e. everything before the first colon.
 std::string_view fluxSummaryKeywordOf(std::string_view key);

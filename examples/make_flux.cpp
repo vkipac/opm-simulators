@@ -22,12 +22,14 @@
 #include <opm/common/OpmLog/OpmLog.hpp>
 #include <opm/input/eclipse/Deck/Deck.hpp>
 #include <opm/input/eclipse/EclipseState/EclipseState.hpp>
+#include <opm/input/eclipse/EclipseState/SummaryConfig/SummaryConfig.hpp>
 #include <opm/input/eclipse/Parser/ErrorGuard.hpp>
 #include <opm/input/eclipse/Parser/InputErrorAction.hpp>
 #include <opm/input/eclipse/Parser/ParseContext.hpp>
 #include <opm/input/eclipse/Parser/Parser.hpp>
 #include <opm/input/eclipse/Schedule/Action/ActionX.hpp>
 #include <opm/input/eclipse/Schedule/Action/Actions.hpp>
+#include <opm/input/eclipse/Schedule/RequisiteSummaryVector.hpp>
 #include <opm/input/eclipse/Schedule/Schedule.hpp>
 #include <opm/input/eclipse/Schedule/UDQ/UDQConfig.hpp>
 #include <opm/input/eclipse/Schedule/UDQ/UDQDefine.hpp>
@@ -35,6 +37,7 @@
 #include <opm/io/eclipse/EclFile.hpp>
 #include <opm/io/eclipse/ERst.hpp>
 #include <opm/io/eclipse/ESmry.hpp>
+#include <opm/io/eclipse/SummaryNode.hpp>
 #include <opm/simulators/flow/flux/FluxDumper.hpp>
 #include <opm/simulators/flow/flux/FluxRegions.hpp>
 #include <opm/simulators/flow/flux/FluxSummaryKeys.hpp>
@@ -1434,6 +1437,7 @@ void applySummaryDefines(SummaryPayload& payload,
 //!   for. Saying which UDQ wants each missing vector turns an obscure failure
 //!   into something the user can act on.
 void requireSummaryKeysForUdqs(const Opm::Schedule& schedule,
+                               const Opm::SummaryConfig& summaryConfig,
                                const SummaryPayload& payload,
                                const std::unordered_map<std::string, SummaryDefinition>& defines)
 {
@@ -1492,31 +1496,100 @@ void requireSummaryKeysForUdqs(const Opm::Schedule& schedule,
         }
     }
 
-    if (missing.empty()) {
+    // A requirement that names its object in full is a different matter. The
+    // keyword being present on some other object says nothing about whether
+    // this one is: RPR__REC on regions 1 and 2 does not make RPR__REC:3
+    // available, and a reduced run that asks for it aborts with
+    //
+    //   Summary vector RPR__REC:3 is unknown
+    //
+    // which says nothing about where it should have come from.
+    //
+    // Only worth raising for a vector the reduced run does not produce for
+    // itself. It computes whatever its own SUMMARY section asks for, and needs
+    // the parent only for what falls outside that.
+    auto namedVectors = Opm::RequisiteSummaryVectors{};
+    for (const auto& udq : schedule.unique<Opm::UDQConfig>()) {
+        udq.second.requisiteSummaryVectors(namedVectors);
+    }
+    for (const auto& action : schedule.back().actions.get()) {
+        action.requisiteSummaryVectors(namedVectors);
+    }
+
+    std::set<std::string> missingKeys;
+
+    for (const auto& vector : namedVectors) {
+        using Cat = Opm::EclIO::SummaryNode::Category;
+
+        switch (Opm::EclIO::SummaryNode::category_from_keyword(vector.keyword)) {
+        case Cat::Well:
+        case Cat::Group:
+        case Cat::Region:
+        case Cat::Segment:
+        case Cat::Node:
+            break;
+
+        default:
+            // A block or connection reference names a cell by I, J and K while
+            // the summary names it by global index, so the two spellings
+            // cannot be compared here.
+            continue;
+        }
+
+        auto key = vector.keyword;
+        for (const auto& argument : vector.arguments) {
+            key += ':';
+            key += argument;
+        }
+
+        if ((availableKeys.count(key) != 0) || summaryConfig.hasSummaryKey(key)) {
+            continue;
+        }
+
+        missingKeys.insert(key);
+    }
+
+    if (missing.empty() && missingKeys.empty()) {
         return;
     }
 
     std::ostringstream msg;
-    msg << "the parent summary does not hold " << missing.size()
-        << " vector(s) the deck's UDQ and ACTIONX expressions refer to, so a reduced "
-           "run could not evaluate them:\n";
 
-    for (const auto& [keyword, owners] : missing) {
-        msg << "  " << keyword << "  needed by ";
-        auto first = true;
-        for (const auto& owner : owners) {
-            if (!first) {
-                msg << ", ";
+    if (!missing.empty()) {
+        msg << "the parent summary does not hold " << missing.size()
+            << " vector(s) the deck's UDQ and ACTIONX expressions refer to, so a reduced "
+               "run could not evaluate them:\n";
+
+        for (const auto& [keyword, owners] : missing) {
+            msg << "  " << keyword << "  needed by ";
+            auto first = true;
+            for (const auto& owner : owners) {
+                if (!first) {
+                    msg << ", ";
+                }
+                msg << owner;
+                first = false;
             }
-            msg << owner;
-            first = false;
+            msg << '\n';
         }
-        msg << '\n';
+
+        msg << "These are keywords; any of the parent's vectors using one of them counts,\n"
+               "so WBHP is satisfied by WBHP on any well.\n";
     }
 
-    msg << "These are keywords; any of the parent's vectors using one of them counts,\n"
-           "so WBHP is satisfied by WBHP on any well.\n"
-           "Resolve this by adding the vectors to the parent's SUMMARY section and "
+    if (!missingKeys.empty()) {
+        msg << "the deck's UDQ and ACTIONX expressions name " << missingKeys.size()
+            << " vector(s) outright which neither the parent summary nor this deck's own\n"
+               "SUMMARY section provides, so a reduced run would abort on the first one:\n";
+
+        for (const auto& key : missingKeys) {
+            msg << "  " << key << '\n';
+        }
+
+        msg << "These are whole keys; another object under the same keyword will not do.\n";
+    }
+
+    msg << "Resolve this by adding the vectors to the parent's SUMMARY section and "
            "rerunning it -- FLUXALL asks for everything this route needs -- or by "
            "supplying each one on the command line with\n"
            "  --smry-define=<TARGET>,<EXISTING_KEY>   to copy another vector, or\n"
@@ -1939,6 +2012,20 @@ int run(const Options& opt)
     const auto deck = loadDeck(parentInput.deckPath, opt.parsingStrictness);
     const Opm::EclipseState state(deck);
     const Opm::Schedule schedule(deck, state);
+
+    // The consumer runs this same deck, so its SUMMARY section says which
+    // vectors the reduced run will compute for itself and which it has to be
+    // given.
+    const auto summaryConfig = [&deck, &state, &schedule]()
+    {
+        auto parseContext = Opm::ParseContext{};
+        auto errors = Opm::ErrorGuard{};
+
+        return Opm::SummaryConfig {
+            deck, schedule, state.fieldProps(), state.aquifer(),
+            parseContext, errors
+        };
+    }();
     const auto requiredFallbacks = collectRequiredSummaryFallbacks(schedule);
     const auto summaryDefines = parseSummaryDefines(opt);
     const auto fluxMode = modeFromString(opt.mode);
@@ -2099,7 +2186,7 @@ int run(const Options& opt)
         // Refuse to write a file a reduced run could not drive. This is checked
         // before narrowing the payload, so that a vector the parent did write
         // counts as available even if it is not one this file will carry.
-        requireSummaryKeysForUdqs(schedule, *summaryPayload, summaryDefines);
+        requireSummaryKeysForUdqs(schedule, summaryConfig, *summaryPayload, summaryDefines);
 
         // Keep the same vectors a live DUMPFLUX run would embed rather than
         // the whole of the parent's summary. Which vectors those are depends on

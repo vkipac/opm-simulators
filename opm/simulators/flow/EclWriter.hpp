@@ -2462,10 +2462,25 @@ private:
     {
         const auto& schedule = this->simulator_.vanguard().schedule();
 
+        // Region, segment and the like cannot be enumerated from the schedule,
+        // so hand over the keys this run is configured to produce. That list
+        // already covers the vectors an ACTIONX or UDQ needs: opm-common
+        // registers those alongside whatever the SUMMARY section asked for,
+        // which is why the parent can evaluate a condition on a region its own
+        // SUMMARY section never mentions.
+        const auto& summaryConfig = this->simulator_.vanguard().summaryConfig();
+
+        auto availableKeys = std::vector<std::string>{};
+        availableKeys.reserve(summaryConfig.size());
+        for (const auto& node : summaryConfig) {
+            availableKeys.push_back(node.uniqueNodeKey());
+        }
+
         return Opm::fluxSummaryKeys(schedule,
                                     FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx),
                                     FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx),
-                                    FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx));
+                                    FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx),
+                                    availableKeys);
     }
 
     std::vector<double> fluxSummaryValues_(const std::vector<std::string>& keys) const
