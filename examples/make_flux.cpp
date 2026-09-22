@@ -1437,22 +1437,41 @@ void requireSummaryKeysForUdqs(const Opm::Schedule& schedule,
                                const SummaryPayload& payload,
                                const std::unordered_map<std::string, SummaryDefinition>& defines)
 {
-    std::unordered_set<std::string> available(payload.keys.begin(), payload.keys.end());
+    // A requirement is a bare KEYWORD while the parent's summary holds
+    // qualified keys, so WBHP is satisfied by WBHP:B-2H and GEFF by GEFF:MANI-B.
+    // Comparing the two directly reports everything that names an object as
+    // missing, which is most of them.
+    std::unordered_set<std::string> availableKeywords;
+    std::unordered_set<std::string> availableKeys(payload.keys.begin(), payload.keys.end());
+
+    const auto addAvailable = [&availableKeywords](const std::string& key)
+    {
+        availableKeywords.emplace(Opm::fluxSummaryKeywordOf(key));
+    };
+
+    for (const auto& key : payload.keys) {
+        addAvailable(key);
+    }
     for (const auto& [target, definition] : defines) {
         (void) definition;
-        available.insert(target);
+        availableKeys.insert(target);
+        addAvailable(target);
     }
 
-    // Missing key -> the UDQs that refer to it.
+    // Missing keyword -> the UDQs that refer to it.
     std::map<std::string, std::set<std::string>> missing;
 
-    const auto note = [&missing, &available](const std::string& key, const std::string& owner)
+    const auto note = [&missing, &availableKeywords, &availableKeys]
+        (const std::string& keyword, const std::string& owner)
     {
-        if (key.empty() || (available.count(key) != 0)) {
+        if (keyword.empty()
+            || (availableKeywords.count(keyword) != 0)
+            || (availableKeys.count(keyword) != 0))
+        {
             return;
         }
 
-        missing[key].insert(owner);
+        missing[keyword].insert(owner);
     };
 
     for (const auto& udq : schedule.unique<Opm::UDQConfig>()) {
@@ -1482,8 +1501,8 @@ void requireSummaryKeysForUdqs(const Opm::Schedule& schedule,
         << " vector(s) the deck's UDQ and ACTIONX expressions refer to, so a reduced "
            "run could not evaluate them:\n";
 
-    for (const auto& [key, owners] : missing) {
-        msg << "  " << key << "  needed by ";
+    for (const auto& [keyword, owners] : missing) {
+        msg << "  " << keyword << "  needed by ";
         auto first = true;
         for (const auto& owner : owners) {
             if (!first) {
@@ -1495,8 +1514,11 @@ void requireSummaryKeysForUdqs(const Opm::Schedule& schedule,
         msg << '\n';
     }
 
-    msg << "Resolve this by adding the vectors to the parent's SUMMARY section and "
-           "rerunning it, or by supplying each one on the command line with\n"
+    msg << "These are keywords; any of the parent's vectors using one of them counts,\n"
+           "so WBHP is satisfied by WBHP on any well.\n"
+           "Resolve this by adding the vectors to the parent's SUMMARY section and "
+           "rerunning it -- FLUXALL asks for everything this route needs -- or by "
+           "supplying each one on the command line with\n"
            "  --smry-define=<TARGET>,<EXISTING_KEY>   to copy another vector, or\n"
            "  --smry-define=<TARGET>,<NUMBER>         to use a constant.";
 
@@ -1731,18 +1753,24 @@ void fillFluxStepData(Opm::FluxDumper::ReportStepData& step,
 
 // Narrow an embedded summary payload down to the vectors a reduced run needs.
 //
+// Selection is by KEYWORD, so every vector the parent wrote under a wanted
+// keyword is kept whatever object it names. Region, segment and block
+// quantities can only be caught this way: nothing but the parent's own summary
+// says which regions or segments it reported on.
+//
 // Keys the parent did not write are dropped rather than faked: a reduced run
 // treats a key it cannot find as absent and falls back on its own evaluation,
 // which is better than handing it a zero. The UDQ fallbacks have already been
 // resolved by this point, so anything still missing really is unavailable.
-void retainSummaryKeys(SummaryPayload& payload, const std::vector<std::string>& wanted)
+void retainSummaryKeys(SummaryPayload& payload, const std::vector<std::string>& wantedKeywords)
 {
-    const auto keep = std::unordered_set<std::string>(wanted.begin(), wanted.end());
+    const auto keep = std::unordered_set<std::string>(wantedKeywords.begin(),
+                                                      wantedKeywords.end());
 
     std::vector<std::size_t> retained;
     retained.reserve(payload.keys.size());
     for (std::size_t i = 0; i < payload.keys.size(); ++i) {
-        if (keep.count(payload.keys[i]) != 0) {
+        if (keep.count(std::string{Opm::fluxSummaryKeywordOf(payload.keys[i])}) != 0) {
             retained.push_back(i);
         }
     }
@@ -2077,22 +2105,23 @@ int run(const Options& opt)
         // the deck's UDQ DEFINE expressions and ACTIONX conditions, so the
         // selection is shared with the simulator instead of being guessed here.
         //
-        // Only what the parent actually wrote can be kept, though. A live run
-        // evaluates any key it likes from its own SummaryState; this tool has
-        // nothing but the SMSPEC, so a key the parent's SUMMARY section never
-        // asked for is simply not available.
+        // Selected by keyword rather than by fully qualified key. A live run
+        // can enumerate the wells and groups a keyword covers, but nothing can
+        // enumerate the regions or segments the parent chose to report on, and
+        // those vectors are just as needed. Matching the keyword keeps whatever
+        // the parent wrote under it.
         const auto& phases = state.runspec().phases();
-        const auto wanted = Opm::fluxSummaryKeys(schedule,
-                                                 phases.active(Opm::Phase::OIL),
-                                                 phases.active(Opm::Phase::WATER),
-                                                 phases.active(Opm::Phase::GAS));
+        const auto wantedKeywords = Opm::fluxSummaryKeywords(schedule,
+                                                             phases.active(Opm::Phase::OIL),
+                                                             phases.active(Opm::Phase::WATER),
+                                                             phases.active(Opm::Phase::GAS));
 
         const auto available = summaryPayload->keys.size();
-        retainSummaryKeys(*summaryPayload, wanted);
+        retainSummaryKeys(*summaryPayload, wantedKeywords);
 
-        std::cout << "Embedding " << summaryPayload->keys.size() << " of the "
-                  << wanted.size() << " parent summary vectors a reduced run can use ("
-                  << available << " present in the parent summary)\n";
+        std::cout << "Embedding " << summaryPayload->keys.size()
+                  << " of the parent's " << available << " summary vectors, drawn from "
+                  << wantedKeywords.size() << " keyword(s) a reduced run can use\n";
 
         if (summaryPayload->reportTimes.size() == reportSteps.size()) {
             restartStepStartIndex = 0;

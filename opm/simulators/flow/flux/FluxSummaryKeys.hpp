@@ -21,11 +21,32 @@
 #define OPM_FLUX_SUMMARY_KEYS_HPP
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Opm {
 
 class Schedule;
+
+/// Which summary KEYWORDS a FLUX file's embedded vectors are drawn from.
+///
+/// Bare keywords, as UDQDefine::required_summary() and ActionX yield them: a
+/// UDQ refers to WBHP, not to WBHP:B-2H, the wells it applies to being held
+/// separately. Matching has to be done at this level, because which objects a
+/// keyword covers -- wells, groups, regions, segments -- is not something the
+/// keyword alone says, and for regions and segments it cannot be enumerated
+/// without knowing what the parent asked for.
+///
+/// \param[in] schedule Parent run's schedule, for the UDQ and ACTIONX
+///    definitions.
+///
+/// \param[in] oil,water,gas Which phases are active.
+///
+/// \return Bare keywords, sorted and deduplicated.
+std::vector<std::string> fluxSummaryKeywords(const Schedule& schedule,
+                                             bool oil,
+                                             bool water,
+                                             bool gas);
 
 /// Which of the parent run's summary vectors belong in a FLUX file.
 ///
@@ -38,6 +59,11 @@ class Schedule;
 /// parent's summary instead would be both wasteful and unpredictable, since it
 /// would depend on what the parent happened to ask for in its SUMMARY section.
 ///
+/// Only the keywords that can be enumerated from the schedule are expanded,
+/// which means the well, group, field and miscellaneous ones. A caller holding
+/// the parent's actual key list should match on fluxSummaryKeywords() instead,
+/// which covers every category.
+///
 /// \param[in] schedule Parent run's schedule, for the UDQ and ACTIONX
 ///    definitions and for the wells and groups the bare keywords expand over.
 ///
@@ -48,6 +74,9 @@ std::vector<std::string> fluxSummaryKeys(const Schedule& schedule,
                                          bool oil,
                                          bool water,
                                          bool gas);
+
+/// The keyword part of a summary key, i.e. everything before the first colon.
+std::string_view fluxSummaryKeywordOf(std::string_view key);
 
 } // namespace Opm
 

@@ -34,10 +34,10 @@
 
 namespace Opm {
 
-std::vector<std::string> fluxSummaryKeys(const Schedule& schedule,
-                                         const bool oil,
-                                         const bool water,
-                                         const bool gas)
+std::vector<std::string> fluxSummaryKeywords(const Schedule& schedule,
+                                             const bool oil,
+                                             const bool water,
+                                             const bool gas)
 {
     auto keywords = std::unordered_set<std::string>{};
 
@@ -75,8 +75,32 @@ std::vector<std::string> fluxSummaryKeys(const Schedule& schedule,
         action.required_summary(keywords);
     }
 
-    // required_summary() yields bare keywords, so expand the well and group
-    // level ones over the objects they can apply to.
+    auto sorted = std::vector<std::string>(keywords.begin(), keywords.end());
+    sorted.erase(std::remove_if(sorted.begin(), sorted.end(),
+                                [](const std::string& keyword)
+                                { return keyword.empty(); }),
+                 sorted.end());
+
+    std::sort(sorted.begin(), sorted.end());
+    sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+
+    return sorted;
+}
+
+std::string_view fluxSummaryKeywordOf(std::string_view key)
+{
+    return key.substr(0, key.find(':'));
+}
+
+std::vector<std::string> fluxSummaryKeys(const Schedule& schedule,
+                                         const bool oil,
+                                         const bool water,
+                                         const bool gas)
+{
+    const auto keywords = fluxSummaryKeywords(schedule, oil, water, gas);
+
+    // The keywords are bare, so expand the well and group level ones over the
+    // objects they can apply to.
     const auto& wells = schedule.wellNames();
     const auto& groups = schedule.groupNames();
 
@@ -84,10 +108,6 @@ std::vector<std::string> fluxSummaryKeys(const Schedule& schedule,
     keys.reserve(keywords.size());
 
     for (const auto& keyword : keywords) {
-        if (keyword.empty()) {
-            continue;
-        }
-
         switch (EclIO::SummaryNode::category_from_keyword(keyword)) {
         case EclIO::SummaryNode::Category::Well:
             for (const auto& well : wells) {
@@ -108,8 +128,10 @@ std::vector<std::string> fluxSummaryKeys(const Schedule& schedule,
 
         default:
             // Region, block, connection, segment, aquifer and node level
-            // quantities are evaluated locally by the reduced run and are not
-            // expandable without further context.
+            // quantities name an object this function has no way to enumerate.
+            // A caller with the parent's own key list in hand should match on
+            // fluxSummaryKeywords() rather than on this expansion, which is
+            // what make_flux does.
             break;
         }
     }
