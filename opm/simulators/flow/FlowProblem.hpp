@@ -2068,6 +2068,7 @@ protected:
             this->fluxBoundaryFaceIndex_.data = {};
             this->fluxBoundaryFaceArea_.data = {};
             this->fluxBoundaryFaceOrdinal_.data = {};
+            this->fluxBoundaryFaceDepth_.data = {};
             return;
         }
 
@@ -2214,6 +2215,7 @@ protected:
     {
         this->fluxBoundaryFaceArea_.resize(numElems, 0.0);
         this->fluxBoundaryFaceOrdinal_.resize(numElems, -1);
+        this->fluxBoundaryFaceDepth_.resize(numElems, 0.0);
 
         if (!this->fluxBoundary_) {
             return;
@@ -2246,6 +2248,12 @@ protected:
                 if (static_cast<std::size_t>(elemIdx) < areas.size()) {
                     areas[elemIdx] = is.geometry().volume();
                     this->fluxBoundaryFaceOrdinal_(dir)[elemIdx] = thisOrdinal;
+
+                    // Where the boundary condition is imposed. The pressures in
+                    // the file belong to the cell on the far side, taken at its
+                    // centre, and have to be carried here before they are used.
+                    this->fluxBoundaryFaceDepth_(dir)[elemIdx] =
+                        is.geometry().center()[dimWorld - 1];
                 }
             }
         }
@@ -2336,8 +2344,21 @@ protected:
         return FaceDir::Unknown;
     }
 
-    void applyFluxBoundaryTransmissibilityOverrides_()
+    //! \brief Depth at which a sector boundary condition is imposed.
+    //!
+    //! \details The face the discretisation uses, which is not where the file's
+    //!   pressures were measured: those belong to the cell on the far side,
+    //!   taken at its centre.
+    Scalar fluxBoundaryFaceDepthAt_(unsigned globalDofIdx, const FaceDir::DirEnum dir) const
     {
+        const auto& depths = this->fluxBoundaryFaceDepth_(dir);
+
+        return (globalDofIdx < depths.size())
+            ? depths[globalDofIdx]
+            : Scalar{0};
+    }
+
+    void applyFluxBoundaryTransmissibilityOverrides_()    {
         if (!this->fluxBoundary_) {
             return;
         }
@@ -2546,6 +2567,9 @@ protected:
     std::vector<std::vector<int>> fluxNncFaceIndex_;
     BCData<Scalar> fluxBoundaryFaceArea_;
     BCData<int> fluxBoundaryFaceOrdinal_;
+
+    //! \brief Depth of each sector boundary face, per (cell, direction).
+    BCData<Scalar> fluxBoundaryFaceDepth_;
     std::shared_ptr<FluxBoundary> fluxBoundary_;
     std::shared_ptr<ParentSummary> fluxParentSummaryData_;
     const EclIO::FluxFile::ReportStep* fluxBoundaryActiveRecord_ = nullptr;

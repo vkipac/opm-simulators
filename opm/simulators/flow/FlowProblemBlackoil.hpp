@@ -1298,6 +1298,44 @@ public:
                     }
                 }
 
+                // The pressures above are the exterior cell's, taken at its
+                // centre, but a boundary condition is imposed at the face and
+                // the discretisation carries it from there to this cell's
+                // centre. The leg from the exterior cell up to the face is
+                // nobody else's to walk, and skipping it imposes the exterior
+                // cell's pressure at a depth where the exterior cell does not
+                // have it. In a dipping layer that is metres of head: on one
+                // field it left an equilibrated sector with no wells open
+                // gaining a quarter of a bar everywhere in five days, and more
+                // than a bar against the steeper parts of the boundary.
+                //
+                // The correction wants densities, which are not known until the
+                // pressure is settled, so take them at the uncorrected pressure
+                // and let the loop below recompute them once it has moved. Over
+                // a few metres of head the second pass changes nothing that
+                // matters.
+                if (std::isfinite(fluxFace->exteriorDepth)) {
+                    const auto dz = this->fluxBoundaryFaceDepthAt_(globalDofIdx, dir)
+                        - fluxFace->exteriorDepth;
+
+                    if (dz != 0.0) {
+                        const auto g = this->gravity()[dimWorld - 1];
+
+                        for (unsigned activePhaseIdx = 0;
+                             activePhaseIdx < FluidSystem::numActivePhases(); ++activePhaseIdx)
+                        {
+                            const auto phaseIdx =
+                                FluidSystem::activeToCanonicalPhaseIdx(activePhaseIdx);
+
+                            const auto rho =
+                                FluidSystem::density(fluidState, phaseIdx, pvtRegionIdx);
+
+                            fluidState.setPressure(phaseIdx,
+                                                   fluidState.pressure(phaseIdx) + rho * g * dz);
+                        }
+                    }
+                }
+
                 for (unsigned activePhaseIdx = 0; activePhaseIdx < FluidSystem::numActivePhases(); ++activePhaseIdx) {
                     const auto phaseIdx = FluidSystem::activeToCanonicalPhaseIdx(activePhaseIdx);
 

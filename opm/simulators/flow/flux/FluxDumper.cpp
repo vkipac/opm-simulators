@@ -122,6 +122,18 @@ void FluxDumper::setBoundaryExteriorPvtRegions(const std::vector<int>& exteriorP
     }
 }
 
+void FluxDumper::setBoundaryExteriorDepths(const std::vector<double>& exteriorDepths)
+{
+    if (exteriorDepths.size() != this->data_.boundaryFaces.size()) {
+        OPM_THROW(std::invalid_argument,
+                  "FluxDumper: exterior depth vector must match boundary face count");
+    }
+
+    for (std::size_t i = 0; i < this->data_.boundaryFaces.size(); ++i) {
+        this->data_.boundaryFaces[i].exteriorDepth = exteriorDepths[i];
+    }
+}
+
 std::vector<double> FluxDumper::aggregateRates(
     const Sampling sampling,
     const std::vector<std::vector<double>>& rateSnapshots,

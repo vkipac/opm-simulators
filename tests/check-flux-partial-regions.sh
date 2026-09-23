@@ -41,6 +41,17 @@ if ! strings "${producer_base}.FLUX" | tr -s ' ' '\n' | grep -qx "RPR__REC:3"; t
     exit 1
 fi
 
+# While we are here: the depth of each exterior cell has to be recorded too.
+# A reduced run imposes the file's pressures at the boundary face, and they
+# were measured at the centre of the cell on the far side; without the depth it
+# cannot carry them from the one to the other, and a dipping boundary then
+# drives flow through a sector that should be standing still.
+if ! strings "${producer_base}.FLUX" | grep -qw "FLXEXDP"; then
+    echo "check-flux-partial-regions: the producer wrote no FLXEXDP array, so a" \
+         "reduced run has no way to tell where the recorded pressures were taken" >&2
+    exit 1
+fi
+
 run_consumer() {
     local dir="$1"
     shift

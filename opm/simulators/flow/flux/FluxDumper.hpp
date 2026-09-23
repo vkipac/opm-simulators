@@ -115,6 +115,13 @@ public:
     //! \brief PVT region of the cell on the far side of each boundary face.
     void setBoundaryExteriorPvtRegions(const std::vector<int>& exteriorPvtRegions);
 
+    //! \brief Record how deep the cell on the far side of each face is.
+    //!
+    //! \details The pressures written per report step are that cell's, taken
+    //!   at its centre, while a reduced run imposes them at the face. Without
+    //!   the depth it cannot carry the one to the other.
+    void setBoundaryExteriorDepths(const std::vector<double>& exteriorDepths);
+
     const EclIO::FluxFile::Data& data() const;
     const std::vector<FluxRegions::BoundaryFace>& regionBoundaryFaces() const;
 

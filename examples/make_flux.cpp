@@ -2139,6 +2139,15 @@ int run(const Options& opt)
     dumpers.reserve(selectedRegions.size());
     outputPaths.reserve(selectedRegions.size());
 
+    // Depth of a cell's centre, by global index, active or not: the cells on
+    // the far side of a sector boundary are exactly the ones the reduced run
+    // does not have.
+    const auto& inputGrid = state.getInputGrid();
+    const auto cellDepth = [&inputGrid](const int globalCell)
+    {
+        return inputGrid.getCellDepth(static_cast<std::size_t>(globalCell));
+    };
+
     for (const auto* regionPtr : selectedRegions) {
         const auto& region = *regionPtr;
 
@@ -2171,6 +2180,21 @@ int run(const Options& opt)
             exteriorPvtRegions.push_back(value);
         }
         dumper.setBoundaryExteriorPvtRegions(exteriorPvtRegions);
+
+        // How deep the centre of that cell is. The pressures written per report
+        // step are taken there, while a reduced run imposes them at the face,
+        // and in a dipping layer the two are metres apart. Without the depth
+        // the reduced run cannot carry the pressure from the one to the other,
+        // and imposes the exterior cell's pressure at a depth where the
+        // exterior cell does not have it.
+        std::vector<double> exteriorDepths;
+        exteriorDepths.reserve(region.boundaryFaces.size());
+        for (const auto& face : region.boundaryFaces) {
+            exteriorDepths.push_back((face.exteriorGlobalCell >= 0)
+                                     ? cellDepth(face.exteriorGlobalCell)
+                                     : std::numeric_limits<double>::quiet_NaN());
+        }
+        dumper.setBoundaryExteriorDepths(exteriorDepths);
 
         outputPaths.push_back(outputPathForRegion(opt.output, region.regionId, multipleRegions));
     }

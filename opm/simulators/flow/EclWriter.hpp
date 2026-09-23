@@ -2124,6 +2124,7 @@ private:
 
             std::vector<double> trans(faces.size(), 0.0);
             std::vector<int> pvtRegion(faces.size(), 0);
+            std::vector<double> exteriorDepth(faces.size(), 0.0);
             for (std::size_t i = 0; i < faces.size(); ++i) {
                 const auto& face = faces[i];
                 const auto interior = vanguard.compressedIndex(face.interiorGlobalCell);
@@ -2148,13 +2149,21 @@ private:
                                                           static_cast<unsigned>(exterior));
 
                 pvtRegion[i] = problem.pvtRegionIndex(static_cast<unsigned>(exterior));
+
+                // How deep the exterior cell's centre is, which is where the
+                // pressures written per report step are taken. A reduced run
+                // imposes them at the face, so it needs this to carry them
+                // there; in a dipping layer the two are metres apart.
+                exteriorDepth[i] = problem.dofCenterDepth(static_cast<unsigned>(exterior));
             }
 
             this->fluxReduceSum_(trans);
             this->fluxReduceSum_(pvtRegion);
+            this->fluxReduceSum_(exteriorDepth);
 
             dumper.setBoundaryTransmissibilities(trans);
             dumper.setBoundaryExteriorPvtRegions(pvtRegion);
+            dumper.setBoundaryExteriorDepths(exteriorDepth);
         }
     }
 

@@ -48,6 +48,12 @@ public:
         //!        producing run.
         int exteriorPvtRegion = 0;
 
+        //! \brief Depth of the centre of the cell on the far side.
+        //!
+        //! \details NaN if the producing run did not record it, in which case
+        //!   the recorded pressure has to be taken at face value.
+        double exteriorDepth = std::numeric_limits<double>::quiet_NaN();
+
         bool operator==(const Face& other) const = default;
     };
 
