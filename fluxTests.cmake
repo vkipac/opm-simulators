@@ -172,6 +172,16 @@ opm_add_test(flux_partial_regions_smoke
     -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-partial-regions.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_PARTIAL_REGIONS_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_PARTIAL_REGIONS_SMOKE.DATA 2"
 )
 
+set(_flux_threshold_pressure_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_threshold_pressure_smoke)
+opm_add_test(flux_threshold_pressure_smoke
+  EXE_TARGET flow_blackoil
+  DRIVER_ARGS
+    -i ${PROJECT_SOURCE_DIR}/tests/flux
+    -r ${_flux_threshold_pressure_result_path}
+    -f FLUX_DUMP_THPRES_SMOKE
+    -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-threshold-pressure.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_THPRES_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_THPRES_SMOKE.DATA"
+)
+
 set(_make_flux_sparse_restart_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+make_flux_sparse_restart_smoke)
 opm_add_test(make_flux_sparse_restart_smoke
   EXE_TARGET flow_blackoil

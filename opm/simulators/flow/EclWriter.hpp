@@ -2125,6 +2125,7 @@ private:
             std::vector<double> trans(faces.size(), 0.0);
             std::vector<int> pvtRegion(faces.size(), 0);
             std::vector<double> exteriorDepth(faces.size(), 0.0);
+            std::vector<int> exteriorEquilRegion(faces.size(), 0);
             for (std::size_t i = 0; i < faces.size(); ++i) {
                 const auto& face = faces[i];
                 const auto interior = vanguard.compressedIndex(face.interiorGlobalCell);
@@ -2155,15 +2156,33 @@ private:
                 // imposes them at the face, so it needs this to carry them
                 // there; in a dipping layer the two are metres apart.
                 exteriorDepth[i] = problem.dofCenterDepth(static_cast<unsigned>(exterior));
+
+                // Which equilibration region the exterior cell sits in. A
+                // reduced run needs it to find the threshold pressure across
+                // the face: its own EQLNUM stops at the boundary, so it has no
+                // way of knowing what lies beyond.
+                exteriorEquilRegion[i] = static_cast<int>
+                    (problem.thresholdPressure()
+                     .equilRegionIndex(static_cast<unsigned>(exterior)));
             }
 
             this->fluxReduceSum_(trans);
             this->fluxReduceSum_(pvtRegion);
             this->fluxReduceSum_(exteriorDepth);
+            this->fluxReduceSum_(exteriorEquilRegion);
 
             dumper.setBoundaryTransmissibilities(trans);
             dumper.setBoundaryExteriorPvtRegions(pvtRegion);
             dumper.setBoundaryExteriorDepths(exteriorDepth);
+            dumper.setBoundaryExteriorEquilRegions(exteriorEquilRegion);
+
+            // The whole region-pair table, not just the entries this boundary
+            // happens to touch. A reduced run has interior region boundaries
+            // too, and would get those as wrong as the ones at its edge. Every
+            // rank holds the same table: it is reduced across them as it is
+            // built.
+            const auto thpres = problem.thresholdPressure().getRestartVector();
+            dumper.setThresholdPressure(std::vector<double>(thpres.begin(), thpres.end()));
         }
     }
 

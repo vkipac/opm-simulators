@@ -54,6 +54,14 @@ public:
         //!   the recorded pressure has to be taken at face value.
         double exteriorDepth = std::numeric_limits<double>::quiet_NaN();
 
+        //! \brief Equilibration region of the cell on the far side, zero-based.
+        //!
+        //! \details Needed to find the threshold pressure across the face:
+        //!   the sector's own EQLNUM stops at its edge, so it cannot tell what
+        //!   region lies beyond. Negative if the producing run did not record
+        //!   it, in which case no threshold can be applied.
+        int exteriorEquilRegion = -1;
+
         bool operator==(const Face& other) const = default;
     };
 

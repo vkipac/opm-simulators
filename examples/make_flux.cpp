@@ -2148,6 +2148,30 @@ int run(const Options& opt)
         return inputGrid.getCellDepth(static_cast<std::size_t>(globalCell));
     };
 
+    // Which equilibration region each cell belongs to, and the parent's
+    // threshold pressures between those regions.
+    //
+    // A defaulted THPRES entry is not a number in the deck: it is the largest
+    // initial potential difference found anywhere along that region boundary,
+    // so it can only be arrived at by equilibrating the whole field. Nothing
+    // offline can recompute it. The parent does write it into its restart
+    // file, for its own restart runs, and that copy is in SI units and laid out
+    // as the same square matrix, so it can be lifted across unchanged.
+    const auto eqlnum = state.fieldProps().has_int("EQLNUM")
+        ? state.fieldProps().get_global_int("EQLNUM")
+        : std::vector<int>{};
+
+    std::vector<double> thresholdPressure;
+    if (restart.hasArray("THRESHPR", reportSteps.front())) {
+        thresholdPressure = restart.getRestartData<double>("THRESHPR", reportSteps.front());
+    }
+    else if (state.getSimulationConfig().getThresholdPressure().size() > 0) {
+        std::cerr << "make_flux: the parent has THPRES active but wrote no THRESHPR to "
+                     "its restart file, so the thresholds cannot be passed on; a reduced "
+                     "run will work out its own, which for defaulted entries will be too "
+                     "small\n";
+    }
+
     for (const auto* regionPtr : selectedRegions) {
         const auto& region = *regionPtr;
 
@@ -2195,6 +2219,22 @@ int run(const Options& opt)
                                      : std::numeric_limits<double>::quiet_NaN());
         }
         dumper.setBoundaryExteriorDepths(exteriorDepths);
+
+        // Which equilibration region that cell is in. The sector's own EQLNUM
+        // stops at its edge, so without this it cannot tell which threshold
+        // pressure, if any, guards the face.
+        std::vector<int> exteriorEquilRegions;
+        exteriorEquilRegions.reserve(region.boundaryFaces.size());
+        for (const auto& face : region.boundaryFaces) {
+            const auto cell = static_cast<std::size_t>(face.exteriorGlobalCell);
+            const auto value = (face.exteriorGlobalCell >= 0) && (cell < eqlnum.size())
+                ? std::max(eqlnum[cell] - 1, 0)
+                : -1;
+            exteriorEquilRegions.push_back(value);
+        }
+        dumper.setBoundaryExteriorEquilRegions(exteriorEquilRegions);
+
+        dumper.setThresholdPressure(thresholdPressure);
 
         outputPaths.push_back(outputPathForRegion(opt.output, region.regionId, multipleRegions));
     }

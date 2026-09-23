@@ -1005,6 +1005,7 @@ public:
         // this point, because determining the threshold pressures may require to access
         // the initial solution.
         this->thresholdPressures_.finishInit();
+        this->adoptFluxThresholdPressures_();
 
         // For CpGrid with LGRs, ecl-output is not supported yet.
         const auto& grid = this->simulator().vanguard().gridView().grid();
@@ -1918,6 +1919,38 @@ public:
     const FlowThresholdPressure<TypeTag>& thresholdPressure() const
     { return thresholdPressures_; }
 
+    /*!
+     * \copydoc FlowProblem::thresholdPressureBoundary
+     */
+    Scalar thresholdPressureBoundary(unsigned globalSpaceIdx,
+                                     unsigned boundaryFaceIdx,
+                                     bool interiorToExterior) const
+    {
+        if (!this->thresholdPressures_.enableThresholdPressure()) {
+            return 0.0;
+        }
+
+        const auto* face = this->fluxBoundaryFaceAtOrdinal_(globalSpaceIdx, boundaryFaceIdx);
+        if ((face == nullptr) || (face->exteriorEquilRegion < 0)) {
+            return 0.0;
+        }
+
+        const auto interiorRegion = this->thresholdPressures_.equilRegionIndex(globalSpaceIdx);
+        const auto exteriorRegion = static_cast<unsigned>(face->exteriorEquilRegion);
+        const auto numRegions = this->thresholdPressures_.numEquilRegions();
+
+        if ((interiorRegion >= numRegions) || (exteriorRegion >= numRegions)) {
+            return 0.0;
+        }
+
+        const auto& table = this->thresholdPressures_.data();
+        const auto offset = interiorToExterior
+            ? interiorRegion * numRegions + exteriorRegion
+            : exteriorRegion * numRegions + interiorRegion;
+
+        return (offset < table.size()) ? table[offset] : Scalar{0};
+    }
+
     FlowThresholdPressure<TypeTag>& thresholdPressure()
     { return thresholdPressures_; }
 
@@ -1935,6 +1968,63 @@ public:
     }
 
 protected:
+    //! \brief Take the producing run's threshold pressures in place of the ones
+    //!        this run worked out for itself.
+    //!
+    //! \details A THPRES entry given as defaulted is not a number in the deck.
+    //!   It is the largest initial potential difference found anywhere along
+    //!   that region boundary, so arriving at it means equilibrating the whole
+    //!   field. A sector holds only part of each region boundary and so arrives
+    //!   at a smaller number -- on one field, 0.01 bar where the parent had
+    //!   0.81 -- which lets flow through faces the parent held shut. The
+    //!   producing run recorded its table for exactly this reason, and it
+    //!   covers the sector's interior region boundaries as well as the ones at
+    //!   its edge.
+    //!
+    //!   Deliberately silent about a table of the wrong size: that means the
+    //!   two runs disagree about how many equilibration regions there are, and
+    //!   entries picked out of it would be meaningless rather than merely
+    //!   imprecise, so the locally computed table is kept and the mismatch
+    //!   reported.
+    void adoptFluxThresholdPressures_()
+    {
+        const auto* fluxData = this->fluxBoundaryData_();
+        if (fluxData == nullptr) {
+            return;
+        }
+
+        const auto& table = fluxData->thresholdPressure;
+        if (table.empty()) {
+            return;
+        }
+
+        const auto numRegions = this->thresholdPressures_.numEquilRegions();
+        const auto expected = static_cast<std::size_t>(numRegions) * numRegions;
+
+        if (!this->thresholdPressures_.enableThresholdPressure()) {
+            OpmLog::warning("USEFLUX: the producing run had threshold pressures but this "
+                            "one does not; add EQLOPTS/THPRES to honour them");
+            return;
+        }
+
+        if (table.size() != expected) {
+            OpmLog::warning(fmt::format("USEFLUX: ignoring the producing run's threshold "
+                                        "pressures: {} entries for {} equilibration "
+                                        "regions, expected {}",
+                                        table.size(), numRegions, expected));
+            return;
+        }
+
+        this->thresholdPressures_.setFromRestart(table);
+
+        OpmLog::info(fmt::format("USEFLUX: adopted the producing run's threshold pressures "
+                                 "over {} equilibration region(s)", numRegions));
+
+        // The table printed during finishInit() was the one this run worked out
+        // for itself, which is no longer the one it will use.
+        this->thresholdPressures_.logPressures();
+    }
+
     void updateExplicitQuantities_(int episodeIdx, int timeStepSize, const bool first_step_after_restart) override
     {
         this->updateExplicitQuantities_(first_step_after_restart);

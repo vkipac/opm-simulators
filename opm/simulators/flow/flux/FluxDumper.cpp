@@ -134,6 +134,24 @@ void FluxDumper::setBoundaryExteriorDepths(const std::vector<double>& exteriorDe
     }
 }
 
+void FluxDumper::setBoundaryExteriorEquilRegions(const std::vector<int>& exteriorEquilRegions)
+{
+    if (exteriorEquilRegions.size() != this->data_.boundaryFaces.size()) {
+        OPM_THROW(std::invalid_argument,
+                  "FluxDumper: exterior equilibration region vector must match "
+                  "boundary face count");
+    }
+
+    for (std::size_t i = 0; i < this->data_.boundaryFaces.size(); ++i) {
+        this->data_.boundaryFaces[i].exteriorEquilRegion = exteriorEquilRegions[i];
+    }
+}
+
+void FluxDumper::setThresholdPressure(std::vector<double> thresholdPressure)
+{
+    this->data_.thresholdPressure = std::move(thresholdPressure);
+}
+
 std::vector<double> FluxDumper::aggregateRates(
     const Sampling sampling,
     const std::vector<std::vector<double>>& rateSnapshots,

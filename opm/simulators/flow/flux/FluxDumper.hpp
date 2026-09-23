@@ -122,6 +122,18 @@ public:
     //!   the depth it cannot carry the one to the other.
     void setBoundaryExteriorDepths(const std::vector<double>& exteriorDepths);
 
+    //! \brief Record which equilibration region the cell on the far side of
+    //!        each face belongs to.
+    void setBoundaryExteriorEquilRegions(const std::vector<int>& exteriorEquilRegions);
+
+    //! \brief Record the producing run's threshold pressures.
+    //!
+    //! \details A defaulted THPRES entry is the largest initial potential
+    //!   difference along a whole region boundary, so a sector holding part of
+    //!   that boundary cannot arrive at the same number and has to be handed
+    //!   this one.
+    void setThresholdPressure(std::vector<double> thresholdPressure);
+
     const EclIO::FluxFile::Data& data() const;
     const std::vector<FluxRegions::BoundaryFace>& regionBoundaryFaces() const;
 

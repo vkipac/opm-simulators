@@ -670,6 +670,20 @@ public:
     }
 
     /*!
+     * \brief Threshold pressure across a boundary face.
+     *
+     * \details Zero unless the run is reading a sector boundary out of a .FLUX
+     *   file and the producing run had threshold pressures across it. The
+     *   ordering matters when THPRES is irreversible, hence the direction flag:
+     *   \p interiorToExterior selects the threshold resisting flow out of this
+     *   cell.
+     */
+    Scalar thresholdPressureBoundary(unsigned /*globalSpaceIdx*/,
+                                     unsigned /*boundaryFaceIdx*/,
+                                     bool /*interiorToExterior*/) const
+    { return 0.0; }
+
+    /*!
      * \brief Relative permeabilities of the fluid entering through a boundary
      *        face.
      *
@@ -1561,6 +1575,22 @@ protected:
         }
 
         return this->fluxBoundary_->faceFromSlot(this->fluxBoundaryFaceSlot_(globalSpaceIdx, dir));
+    }
+
+    //! \brief The sector-boundary face a cell's \p bfIdx'th boundary face is,
+    //!        or nullptr if it is not one.
+    //!
+    //! \details The discretisation numbers a cell's boundary faces by position
+    //!   and knows nothing of their direction, while everything read out of the
+    //!   .FLUX file is keyed by direction.
+    const FluxBoundary::Face* fluxBoundaryFaceAtOrdinal_(const unsigned int globalSpaceIdx,
+                                                         const unsigned int bfIdx) const
+    {
+        const auto dir = this->fluxBoundaryDirAt_(globalSpaceIdx, bfIdx);
+
+        return (dir == FaceDir::Unknown)
+            ? nullptr
+            : this->fluxBoundaryFace_(globalSpaceIdx, dir);
     }
 
     const EclIO::FluxFile::Data* fluxBoundaryData_() const
