@@ -430,24 +430,46 @@ public:
     //! \details The consumer deck is the parent deck, so the schedule still
     //!          describes every well. Wells completed outside the region have
     //!          no active connection and take no part in the sector run.
+    //!
+    //!          A well belongs to the sector if ANY rank holds one of its
+    //!          connections, which is why this is a collective and has to be
+    //!          reached on every rank. Answering it rank by rank gives each a
+    //!          different set of absent wells, and the group target correction
+    //!          then subtracts a different amount on each; the ranks proceed to
+    //!          disagree about how the group is controlled, and the first
+    //!          collective that decision reaches no longer matches across them.
     std::vector<std::string> fluxLocalWellNames_(const std::size_t stepIdx) const
     {
         const auto& vanguard = this->simulator().vanguard();
         const auto& schedule = vanguard.schedule();
 
+        const auto& wellNames = schedule.wellNames(stepIdx);
+
+        auto connected = std::vector<int>(wellNames.size(), 0);
+        std::transform(wellNames.begin(), wellNames.end(), connected.begin(),
+                       [&vanguard, &schedule, stepIdx](const std::string& wellName)
+                       {
+                           const auto& well = schedule.getWell(wellName, stepIdx);
+
+                           return std::any_of(well.getConnections().begin(),
+                                              well.getConnections().end(),
+                                              [&vanguard](const auto& conn)
+                                              {
+                                                  return vanguard.compressedIndex(conn.global_index()) >= 0;
+                                              })
+                               ? 1 : 0;
+                       });
+
+        // Logical OR across the ranks. The well name order comes from the
+        // schedule, so every rank indexes the same wells.
+        if (!connected.empty()) {
+            vanguard.grid().comm().max(connected.data(), connected.size());
+        }
+
         std::vector<std::string> localWells;
-        for (const auto& wellName : schedule.wellNames(stepIdx)) {
-            const auto& well = schedule.getWell(wellName, stepIdx);
-
-            const auto connected =
-                std::any_of(well.getConnections().begin(), well.getConnections().end(),
-                            [&vanguard](const auto& conn)
-                            {
-                                return vanguard.compressedIndex(conn.global_index()) >= 0;
-                            });
-
-            if (connected) {
-                localWells.push_back(wellName);
+        for (std::size_t i = 0; i < wellNames.size(); ++i) {
+            if (connected[i] != 0) {
+                localWells.push_back(wellNames[i]);
             }
         }
 
@@ -538,9 +560,19 @@ public:
 
         std::unordered_set<std::string> correctedTargets;
 
-        const auto correctTarget = [&](const UDAValue& target,
-                                       const std::string& groupName,
-                                       const std::string& ratePrefix)
+        // The UDA targets to correct, in the order the groups come out of the
+        // schedule, so that every rank builds the same list.
+        struct Target {
+            std::string udqName;
+            std::string groupName;
+            std::string ratePrefix;
+        };
+
+        std::vector<Target> targets;
+
+        const auto noteTarget = [&](const UDAValue& target,
+                                    const std::string& groupName,
+                                    const std::string& ratePrefix)
         {
             if (!target.is<std::string>()) {
                 // A literal target cannot be rewritten here; the group control
@@ -548,39 +580,12 @@ public:
                 return;
             }
 
-            const auto udqName = target.get<std::string>();
-
-            // Read the uncorrected value from the UDQ state rather than the
-            // summary state: the summary value may already hold the correction
-            // from an earlier time step, and subtracting again would compound.
-            if (!udqState.has(udqName)) {
-                return;
-            }
-
+            auto udqName = target.get<std::string>();
             if (!correctedTargets.insert(udqName).second) {
                 return;
             }
 
-            double absentRate = 0.0;
-            for (const auto& wellName : absentWells) {
-                if (!inGroup(wellName, groupName)) {
-                    continue;
-                }
-
-                const auto rate = parent->valueAt(ratePrefix + wellName, time);
-                if (std::isfinite(rate)) {
-                    absentRate += rate;
-                }
-            }
-
-            if (!(std::abs(absentRate) > 0.0)) {
-                return;
-            }
-
-            const auto corrected = udqState.get(udqName) - absentRate;
-            if (std::isfinite(corrected)) {
-                summaryState.set(udqName, corrected);
-            }
+            targets.push_back({std::move(udqName), groupName, ratePrefix});
         };
 
         for (const auto& groupName : schedule.groupNames(stepIdx)) {
@@ -594,10 +599,73 @@ public:
             }
 
             const auto& production = group.productionProperties();
-            correctTarget(production.oil_target, groupName, "WOPR:");
-            correctTarget(production.water_target, groupName, "WWPR:");
-            correctTarget(production.gas_target, groupName, "WGPR:");
-            correctTarget(production.liquid_target, groupName, "WLPR:");
+            noteTarget(production.oil_target, groupName, "WOPR:");
+            noteTarget(production.water_target, groupName, "WWPR:");
+            noteTarget(production.gas_target, groupName, "WGPR:");
+            noteTarget(production.liquid_target, groupName, "WLPR:");
+        }
+
+        if (targets.empty()) {
+            return;
+        }
+
+        // Read the uncorrected value from the UDQ state rather than the summary
+        // state: the summary value may already hold the correction from an
+        // earlier time step, and subtracting again would compound.
+        //
+        // Only the I/O rank has it, though. evalSummary() evaluates the UDQs
+        // there and shares the summary state afterwards but not the UDQ state,
+        // which elsewhere leaves every other rank with whatever it was handed
+        // when the deck was distributed. Taken at face value that skips the
+        // correction on all but one rank -- the others do not even find the
+        // quantity -- and the group is then driven to a different target on
+        // each. Hence the broadcast, which is why this has to be reached on
+        // every rank.
+        const auto& comm = vanguard.grid().comm();
+
+        auto uncorrected = std::vector<double>(targets.size(),
+                                               std::numeric_limits<double>::quiet_NaN());
+
+        if (comm.rank() == 0) {
+            std::transform(targets.begin(), targets.end(), uncorrected.begin(),
+                           [&udqState](const Target& target)
+                           {
+                               return udqState.has(target.udqName)
+                                   ? udqState.get(target.udqName)
+                                   : std::numeric_limits<double>::quiet_NaN();
+                           });
+        }
+
+        comm.broadcast(uncorrected.data(), static_cast<int>(uncorrected.size()), 0);
+
+        for (std::size_t i = 0; i < targets.size(); ++i) {
+            if (!std::isfinite(uncorrected[i])) {
+                // Nothing defines this quantity yet.
+                continue;
+            }
+
+            const auto& target = targets[i];
+
+            double absentRate = 0.0;
+            for (const auto& wellName : absentWells) {
+                if (!inGroup(wellName, target.groupName)) {
+                    continue;
+                }
+
+                const auto rate = parent->valueAt(target.ratePrefix + wellName, time);
+                if (std::isfinite(rate)) {
+                    absentRate += rate;
+                }
+            }
+
+            if (!(std::abs(absentRate) > 0.0)) {
+                continue;
+            }
+
+            const auto corrected = uncorrected[i] - absentRate;
+            if (std::isfinite(corrected)) {
+                summaryState.set(target.udqName, corrected);
+            }
         }
     }
 

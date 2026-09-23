@@ -228,6 +228,25 @@ set(_make_flux_fluxnum_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow
           -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-fault-boundary-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_SUMMARY_BIN} ${PROJECT_BINARY_DIR}/bin/inspect_flux ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_FAULT_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_FAULT_SMOKE.DATA 1,1,5 2,1,5 I+"
       )
 
+      # Same again, for a sector whose group target is a UDA. The correction
+      # that removes the absent wells' share of that target reads two things
+      # that used to be answered rank by rank: which wells the sector holds,
+      # and the uncorrected value, which only the I/O rank has. Both are now
+      # settled across the ranks, which also means this path carries
+      # collectives and has to be reached on every rank -- if it were not,
+      # this test would hang rather than fail.
+      set(_flux_uda_group_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_uda_group_smoke)
+
+      opm_add_test(flux_uda_group_smoke
+        EXE_TARGET
+          flow_blackoil
+        DRIVER_ARGS
+          -i ${PROJECT_SOURCE_DIR}/tests/flux
+          -r ${_flux_uda_group_result_path}
+          -f FLUX_DUMP_UDA_GROUP_SMOKE
+          -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-parallel-consumer.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_SUMMARY_BIN} ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_UDA_GROUP_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_UDA_GROUP_SMOKE.DATA 2 GOPT:G1 WOPT:P3 FOPT"
+      )
+
       # A consumer must give the same answer however many ranks it runs on.
       # The NNC sector is used because it exercises both kinds of boundary
       # face, the axis-aligned ones and the one that arrives as a source term.
