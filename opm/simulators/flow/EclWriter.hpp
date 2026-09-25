@@ -28,6 +28,7 @@
 #ifndef OPM_ECL_WRITER_HPP
 #define OPM_ECL_WRITER_HPP
 
+#include <dune/grid/common/mcmgmapper.hh>
 #include <dune/grid/common/partitionset.hh>
 
 #include <opm/common/TimingMacros.hpp> // OPM_TIMEBLOCK
@@ -75,6 +76,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
@@ -1481,6 +1483,123 @@ private:
             : std::make_pair(c2, c1);
     }
 
+    //! \brief Append the non-neighbour connections the grid itself makes.
+    //!
+    //! \details The deck's NNC keyword and PINCH are not the only sources of
+    //!   connections between cells that are not axis neighbours. A fault with
+    //!   throw joins each cell on one side to whichever cells face it on the
+    //!   other, several layers up or down, and nothing in the input lists
+    //!   those: the grid works them out from the corner-point geometry. Where
+    //!   such a fault runs along a sector boundary, every one of them is a
+    //!   boundary face of the sector, and leaving them out seals the fault in
+    //!   the reduced run however open it is in the full one. On one field that
+    //!   left a column of cells against a fault 8 bar off and drove the water
+    //!   cut of a producer four cells away steadily higher.
+    //!
+    //!   Pairs of vertical neighbours with nothing but inactive cells between
+    //!   them are connected directly and are not NNCs, so they are left out,
+    //!   as are axis neighbours; both are what the Cartesian faces cover.
+    //!   Duplicates of the input connections are harmless: the region builder
+    //!   discards a face it has already seen.
+    //!
+    //!   Walks the serial I/O grid, and so only on the I/O rank.
+    void appendGridNncPairs_(std::vector<int>& nncPairs) const
+    {
+        if ((this->equilGrid_ == nullptr) || (this->equilCartMapper_ == nullptr)) {
+            return;
+        }
+
+        using GlobalGridView = typename EquilGrid::LeafGridView;
+        using GlobalElementMapper = Dune::MultipleCodimMultipleGeomTypeMapper<GlobalGridView>;
+
+        const GlobalGridView gridView = this->equilGrid_->leafGridView();
+        const GlobalElementMapper elemMapper { gridView, Dune::mcmgElementLayout() };
+        const auto& cartMapper = *this->equilCartMapper_;
+        const auto dims = cartMapper.cartesianDimensions();
+
+        std::unordered_set<int> active;
+        for (const auto& elem : elements(gridView)) {
+            active.insert(cartMapper.cartesianIndex(elemMapper.index(elem)));
+        }
+
+        const auto ijkOf = [&dims](int cell)
+        {
+            const int i = cell % dims[0];
+            cell /= dims[0];
+            return std::array<int, 3>{ i, cell % dims[1], cell / dims[1] };
+        };
+
+        const auto directlyConnected = [&](const int c1, const int c2)
+        {
+            const auto a = ijkOf(c1);
+            const auto b = ijkOf(c2);
+            const int di = std::abs(a[0] - b[0]);
+            const int dj = std::abs(a[1] - b[1]);
+            const int dk = std::abs(a[2] - b[2]);
+
+            if (di + dj + dk == 1) {
+                return true;
+            }
+
+            if ((di == 0) && (dj == 0)) {
+                const auto step = dims[0] * dims[1];
+                for (int c = std::min(c1, c2) + step; c < std::max(c1, c2); c += step) {
+                    if (active.count(c) != 0) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            return false;
+        };
+
+        std::set<std::pair<int, int>> seen;
+        for (const auto& elem : elements(gridView)) {
+            const int c1 = cartMapper.cartesianIndex(elemMapper.index(elem));
+            for (const auto& is : intersections(gridView, elem)) {
+                if (!is.neighbor()) {
+                    continue;
+                }
+
+                const int c2 = cartMapper.cartesianIndex(elemMapper.index(is.outside()));
+                if ((c2 <= c1) || directlyConnected(c1, c2)) {
+                    continue;
+                }
+
+                if (seen.emplace(c1, c2).second) {
+                    nncPairs.push_back(c1);
+                    nncPairs.push_back(c2);
+                }
+            }
+        }
+    }
+
+    //! \brief Where each NNC sits in the writer's NNC list.
+    //!
+    //! \details FLORESN is indexed by that list, which holds the deck's
+    //!   connections followed by the ones the grid generated, so this is the
+    //!   only index that finds an NNC's flux. It is complete only once the
+    //!   transmissibilities have been exported, well after the regions are set
+    //!   up, hence the deferred construction.
+    const std::map<std::pair<int, int>, int>& fluxNncPairToIndex_() const
+    {
+        if (this->fluxNncIndex_.empty()) {
+            const auto& outputNnc = this->getOutputNnc();
+            if (!outputNnc.empty()) {
+                const auto& level0 = outputNnc.front();
+                for (std::size_t n = 0; n < level0.size(); ++n) {
+                    this->fluxNncIndex_.try_emplace(
+                        normalizedNncPair_(static_cast<int>(level0[n].cell1),
+                                           static_cast<int>(level0[n].cell2)),
+                        static_cast<int>(n));
+                }
+            }
+        }
+
+        return this->fluxNncIndex_;
+    }
+
     // A sector boundary cuts the grid, and a well with completions on both
     // sides of it cannot be reproduced by a reduced run: that run sees only the
     // connections inside its own region but solves the well as though it were
@@ -1651,6 +1770,8 @@ private:
                 if (state.hasPinchNNC()) {
                     appendNnc(state.getPinchNNC());
                 }
+
+                this->appendGridNncPairs_(nncPairs);
             }
         }
 
@@ -1680,14 +1801,9 @@ private:
         }
 
         std::vector<std::array<int, 2>> nncConnections;
-        this->fluxNncPairToIndex_.clear();
         nncConnections.reserve(nncPairs.size() / 2);
         for (std::size_t n = 0; n + 1 < nncPairs.size(); n += 2) {
-            const auto cell1 = nncPairs[n];
-            const auto cell2 = nncPairs[n + 1];
-            nncConnections.push_back({cell1, cell2});
-            this->fluxNncPairToIndex_.try_emplace(normalizedNncPair_(cell1, cell2),
-                                                  static_cast<int>(n / 2));
+            nncConnections.push_back({nncPairs[n], nncPairs[n + 1]});
         }
 
         const auto regions = FluxRegions::extract(dims, regionValues, actnum, nncConnections);
@@ -2171,6 +2287,20 @@ private:
             this->fluxReduceSum_(exteriorDepth);
             this->fluxReduceSum_(exteriorEquilRegion);
 
+            // A face nothing flows through says nothing about the cell beyond
+            // it, and on more than one rank that cell may not even be at hand:
+            // with no connection it is in nobody's overlap, and the sums above
+            // leave its entries at zero where a serial run would have filled
+            // them in. Record it as unknown whatever the partition, so the file
+            // is the same on any number of ranks.
+            for (std::size_t i = 0; i < faces.size(); ++i) {
+                if (!(trans[i] > 0.0)) {
+                    pvtRegion[i] = 0;
+                    exteriorDepth[i] = std::numeric_limits<double>::quiet_NaN();
+                    exteriorEquilRegion[i] = -1;
+                }
+            }
+
             dumper.setBoundaryTransmissibilities(trans);
             dumper.setBoundaryExteriorPvtRegions(pvtRegion);
             dumper.setBoundaryExteriorDepths(exteriorDepth);
@@ -2290,9 +2420,10 @@ private:
             if (haveAggregatedRates || haveCapturedRates) {
                 // NNC contributions are not affected by that move and are
                 // resolved here so the parallel gather has completed.
+                const auto& nncIndex = this->fluxNncPairToIndex_();
                 const auto nncRates = dumper.makeFaceMajorRates(
-                    [&floresn, this](const FluxRegions::BoundaryFace& face,
-                                     const EclIO::FluxFile::Phase phase)
+                    [&floresn, &nncIndex, this](const FluxRegions::BoundaryFace& face,
+                                                const EclIO::FluxFile::Phase phase)
                     {
                         if (!face.isNnc) {
                             return 0.0;
@@ -2301,8 +2432,8 @@ private:
                         const auto comp = this->fluxComponentIndex_(phase);
                         const auto key = normalizedNncPair_(face.interiorGlobalCell,
                                                             face.exteriorGlobalCell);
-                        const auto it = this->fluxNncPairToIndex_.find(key);
-                        if (it == this->fluxNncPairToIndex_.end()) {
+                        const auto it = nncIndex.find(key);
+                        if (it == nncIndex.end()) {
                             return 0.0;
                         }
 
@@ -2656,7 +2787,10 @@ private:
     Inplace inplace_;
     std::vector<FluxDumper> fluxDumpers_;
     std::vector<std::string> fluxOutputPaths_;
-    std::map<std::pair<int, int>, int> fluxNncPairToIndex_;
+    //! Position of each NNC in the writer's NNC list, keyed by its normalised
+    //! Cartesian pair. Built on first use, since the list is only complete
+    //! once the transmissibilities have been exported. See fluxNncPairToIndex_().
+    mutable std::map<std::pair<int, int>, int> fluxNncIndex_;
     std::vector<std::vector<double>> fluxCapturedFaceRates_;
     std::vector<std::vector<std::vector<double>>> fluxMassSnapshots_;
     std::vector<double> fluxRateTimeWeights_;

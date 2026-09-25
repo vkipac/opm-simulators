@@ -988,13 +988,84 @@ std::vector<double> loadTransArray(Opm::EclIO::ERst& restart,
 //!   side, so a minus-facing boundary face is described by the array entry of
 //!   the cell outside the sector. The arrays are in the deck's units while the
 //!   FLUX payload is SI throughout, so convert on the way out.
+NncKey normalizedNncPair(const int c1, const int c2)
+{
+    return (c1 <= c2)
+        ? std::make_pair(c1, c2)
+        : std::make_pair(c2, c1);
+}
+
+//! The parent's non-neighbour connections, in the order it wrote them.
+//!
+//! Read from its EGRID, which lists every one of them: the deck's NNC
+//! keyword, PINCH, and above all the connections the grid works out for
+//! itself across faults with throw, which no input keyword describes. The
+//! restart file's FLOOILN and friends are indexed by this same list, and
+//! TRANNNC in the INIT file holds their transmissibilities in it too.
+struct ParentNnc {
+    std::vector<std::array<int, 2>> pairs;
+    std::map<NncKey, int> index;
+    std::vector<double> trans;
+};
+
+ParentNnc loadParentNnc(const std::optional<fs::path>& gridPath,
+                        const std::optional<fs::path>& initPath)
+{
+    ParentNnc nnc;
+    if (!gridPath) {
+        return nnc;
+    }
+
+    Opm::EclIO::EclFile egrid(gridPath->string(), /*preload=*/false);
+    if (!egrid.hasKey("NNC1") || !egrid.hasKey("NNC2")) {
+        return nnc;
+    }
+
+    const auto& nnc1 = egrid.get<int>("NNC1");
+    const auto& nnc2 = egrid.get<int>("NNC2");
+    const auto count = std::min(nnc1.size(), nnc2.size());
+
+    nnc.pairs.reserve(count);
+    for (std::size_t n = 0; n < count; ++n) {
+        // One-based in the file.
+        const int c1 = nnc1[n] - 1;
+        const int c2 = nnc2[n] - 1;
+        nnc.pairs.push_back({c1, c2});
+        nnc.index.try_emplace(normalizedNncPair(c1, c2), static_cast<int>(n));
+    }
+
+    if (initPath) {
+        Opm::EclIO::EclFile init(initPath->string(), /*preload=*/false);
+        if (init.hasKey("TRANNNC")) {
+            nnc.trans = loadNumericArray(init, "TRANNNC");
+        }
+    }
+
+    return nnc;
+}
+
 double transmissibilityForFace(const Opm::FluxRegions::BoundaryFace& face,
                                const CellLookup& cells,
                                const Opm::UnitSystem& unitSystem,
                                const std::vector<double>& tranx,
                                const std::vector<double>& trany,
-                               const std::vector<double>& tranz)
+                               const std::vector<double>& tranz,
+                               const ParentNnc& nnc)
 {
+    if (face.isNnc) {
+        // Its direction is only the rough bearing of the far cell, and the
+        // TRANX/Y/Z value in that direction belongs to a different pair.
+        const auto it = nnc.index.find(normalizedNncPair(face.interiorGlobalCell,
+                                                         face.exteriorGlobalCell));
+        if ((it == nnc.index.end())
+            || (static_cast<std::size_t>(it->second) >= nnc.trans.size()))
+        {
+            throw std::invalid_argument("NNC boundary face has no TRANNNC entry in the parent INIT file");
+        }
+
+        return unitSystem.to_si(Opm::UnitSystem::measure::transmissibility,
+                                nnc.trans[static_cast<std::size_t>(it->second)]);
+    }
     const auto requireIndex = [&](const int index, const char* axis) {
         if (index < 0) {
             throw std::invalid_argument(std::string{"mapping reaches the outer parent boundary; "}
@@ -1137,41 +1208,6 @@ std::string nncRateArrayName(const Opm::EclIO::FluxFile::Phase phase)
     }
 
     throw std::invalid_argument("unsupported phase for NNC FLUX-mode rate array lookup");
-}
-
-NncKey normalizedNncPair(const int c1, const int c2)
-{
-    return (c1 <= c2)
-        ? std::make_pair(c1, c2)
-        : std::make_pair(c2, c1);
-}
-
-std::map<NncKey, int> buildNncPairToIndex(const Opm::EclipseState& state)
-{
-    std::map<NncKey, int> pairToIndex;
-    int nncIndex = 0;
-
-    if (state.hasInputNNC()) {
-        const auto& inputNnc = state.getInputNNC().input();
-        for (const auto& nnc : inputNnc) {
-            pairToIndex.try_emplace(normalizedNncPair(static_cast<int>(nnc.cell1),
-                                                      static_cast<int>(nnc.cell2)),
-                                    nncIndex);
-            ++nncIndex;
-        }
-    }
-
-    if (state.hasPinchNNC()) {
-        const auto& pinchNnc = state.getPinchNNC();
-        for (const auto& nnc : pinchNnc) {
-            pairToIndex.try_emplace(normalizedNncPair(static_cast<int>(nnc.cell1),
-                                                      static_cast<int>(nnc.cell2)),
-                                    nncIndex);
-            ++nncIndex;
-        }
-    }
-
-    return pairToIndex;
 }
 
 SummaryPayload loadSummaryPayload(const fs::path& summaryPath)
@@ -2062,7 +2098,8 @@ int run(const Options& opt)
     // region to inactive cells. Hand ACTNUM to the extraction so that this
     // tool builds the same region as an in-simulator DUMPFLUX run would.
     const auto actnum = parentActnum(parentInput.gridPath, state, dims);
-    const auto regions = Opm::FluxRegions::extract(dims, regionValues, actnum, {});
+    const auto parentNnc = loadParentNnc(parentInput.gridPath, parentInput.initPath);
+    const auto regions = Opm::FluxRegions::extract(dims, regionValues, actnum, parentNnc.pairs);
     if (regions.empty()) {
         throw std::invalid_argument("the region definition selected no cells");
     }
@@ -2100,7 +2137,7 @@ int run(const Options& opt)
 
     const bool multipleRegions = selectedRegions.size() > 1U;
     const auto phaseMaskValue = phaseMask(deck);
-    const auto nncPairToIndex = buildNncPairToIndex(state);
+    const auto& nncPairToIndex = parentNnc.index;
 
     Opm::EclIO::ERst restart(parentInput.restartPath.string());
     const auto reportSteps = restart.listOfReportStepNumbers();
@@ -2179,7 +2216,8 @@ int run(const Options& opt)
         boundaryTransmissibilities.reserve(region.boundaryFaces.size());
         for (const auto& face : region.boundaryFaces) {
             boundaryTransmissibilities.push_back(transmissibilityForFace(face, cells, unitSystem,
-                                                                         tranx, trany, tranz));
+                                                                         tranx, trany, tranz,
+                                                                         parentNnc));
         }
 
         auto& dumper = dumpers.emplace_back(parentInput.rootPath.filename().string(),

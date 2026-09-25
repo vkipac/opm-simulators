@@ -238,6 +238,18 @@ set(_make_flux_fluxnum_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow
           -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-fault-boundary-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_SUMMARY_BIN} ${PROJECT_BINARY_DIR}/bin/inspect_flux ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_FAULT_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_FAULT_SMOKE.DATA 1,1,5 2,1,5 I+"
       )
 
+      set(_flux_fault_throw_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_fault_throw_smoke)
+
+      opm_add_test(flux_fault_throw_smoke
+        EXE_TARGET
+          flow_blackoil
+        DRIVER_ARGS
+          -i ${PROJECT_SOURCE_DIR}/tests/flux
+          -r ${_flux_fault_throw_result_path}
+          -f FLUX_DUMP_THROW_SMOKE
+          -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-fault-throw.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_SUMMARY_BIN} ${PROJECT_BINARY_DIR}/bin/inspect_flux ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_THROW_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_THROW_SMOKE.DATA ${PROJECT_BINARY_DIR}/bin/make_flux"
+      )
+
       # Same again, for a sector whose group target is a UDA. The correction
       # that removes the absent wells' share of that target reads two things
       # that used to be answered rank by rank: which wells the sector holds,

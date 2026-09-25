@@ -1055,7 +1055,7 @@ public:
     {
         this->aquiferModel_.addToSource(rate, globalDofIdx, timeIdx);
 
-        this->addFluxNncSource_(rate, globalDofIdx);
+        this->addFluxNncSource_(rate, globalDofIdx, timeIdx);
 
         // Add source term from deck
         const auto& source = this->simulator().vanguard().schedule()[this->episodeIndex()].source();
@@ -1196,6 +1196,191 @@ public:
     void setSimulationReport(const SimulatorReport& report)
     { return eclWriter_->setSimulationReport(report); }
 
+    //! \brief The state of the parent's cell on the far side of a sector
+    //!        boundary face, as recorded in the .FLUX file.
+    //!
+    //! \details Pressures come carried from that cell's centre to \p targetDepth,
+    //!   using its own densities; pass NaN to leave them at the centre.
+    InitialFluidState fluxExteriorFluidState_(const EclIO::FluxFile::Data& fluxData,
+                                              const EclIO::FluxFile::ReportStep& fluxStep,
+                                              const FluxBoundary::Face& fluxFace,
+                                              const std::size_t fluxFaceIndex,
+                                              const unsigned globalDofIdx,
+                                              const Scalar targetDepth) const
+    {
+        InitialFluidState fluidState;
+
+        // The stream on the far side belongs to the parent's cell, not
+        // to this one, so its PVT region is the one the producing run
+        // recorded. Falling back to the interior region would evaluate
+        // the density, formation volume factor and viscosity of the
+        // inflow against the wrong tables.
+        const int pvtRegionIdx = (fluxFace.exteriorPvtRegion >= 0)
+            ? fluxFace.exteriorPvtRegion
+            : this->pvtRegionIndex(globalDofIdx);
+        fluidState.setPvtRegionIndex(pvtRegionIdx);
+
+        const auto& initialState = initialFluidStates_[globalDofIdx];
+        double sw = FluidSystem::phaseIsActive(waterPhaseIdx)
+                  ? initialState.saturation(waterPhaseIdx)
+                  : 0.0;
+        double sg = FluidSystem::phaseIsActive(gasPhaseIdx)
+                  ? initialState.saturation(gasPhaseIdx)
+                  : 0.0;
+
+        if (fluxFaceIndex < fluxStep.swat.size()) {
+            sw = fluxStep.swat[fluxFaceIndex];
+        }
+        if (fluxFaceIndex < fluxStep.sgas.size()) {
+            sg = fluxStep.sgas[fluxFaceIndex];
+        }
+
+        sw = std::clamp(sw, 0.0, 1.0);
+        sg = std::clamp(sg, 0.0, 1.0);
+        const double so = std::clamp(1.0 - sw - sg, 0.0, 1.0);
+
+        if (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)) {
+            fluidState.setSaturation(FluidSystem::waterPhaseIdx, sw);
+        }
+        if (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
+            fluidState.setSaturation(FluidSystem::gasPhaseIdx, sg);
+        }
+        if (FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)) {
+            fluidState.setSaturation(FluidSystem::oilPhaseIdx, so);
+        }
+        fluidState.setTotalSaturation(1.0);
+
+        const double pressure = fluxStep.pressures[fluxFaceIndex];
+
+        // Capillary pressure of the exterior cell, relative to the
+        // reference phase. The producing run recorded it because
+        // recomputing it here would use this cell's saturation-function
+        // region, scaled end points and hysteresis state, none of which
+        // describe the cell the pressure came from.
+        std::array<Scalar, numPhases> pc = {0};
+        const auto numPhaseSlots =
+            static_cast<std::size_t>(fluxData.header.numPhases);
+        const auto pcBase = fluxFaceIndex * numPhaseSlots;
+        if (fluxStep.capPressure.size() >= pcBase + numPhaseSlots) {
+            std::size_t slot = 0;
+            const auto load = [&](const unsigned phaseIdx)
+            {
+                if (FluidSystem::phaseIsActive(phaseIdx)) {
+                    pc[phaseIdx] = fluxStep.capPressure[pcBase + slot];
+                    ++slot;
+                }
+            };
+            load(oilPhaseIdx);
+            load(waterPhaseIdx);
+            load(gasPhaseIdx);
+        }
+        else {
+            const auto& matParams = this->materialLawParams(globalDofIdx);
+            MaterialLaw::capillaryPressures(pc, matParams, fluidState);
+        }
+
+        Valgrind::CheckDefined(pressure);
+        Valgrind::CheckDefined(pc);
+        for (unsigned activePhaseIdx = 0; activePhaseIdx < FluidSystem::numActivePhases(); ++activePhaseIdx) {
+            const auto phaseIdx = FluidSystem::activeToCanonicalPhaseIdx(activePhaseIdx);
+            if (Indices::oilEnabled)
+                fluidState.setPressure(phaseIdx, pressure + (pc[phaseIdx] - pc[oilPhaseIdx]));
+            else if (Indices::gasEnabled)
+                fluidState.setPressure(phaseIdx, pressure + (pc[phaseIdx] - pc[gasPhaseIdx]));
+            else if (Indices::waterEnabled)
+                fluidState.setPressure(phaseIdx, pressure);
+        }
+
+        if constexpr (energyModuleType != EnergyModules::NoTemperature) {
+            double temperature = initialState.temperature(0);
+            if (fluxFaceIndex < fluxStep.temperature.size()) {
+                temperature = fluxStep.temperature[fluxFaceIndex];
+            }
+            fluidState.setTemperature(temperature);
+        }
+
+        if constexpr (enableDissolvedGas) {
+            if (FluidSystem::enableDissolvedGas()) {
+                if (fluxFaceIndex < fluxStep.rs.size()) {
+                    fluidState.setRs(fluxStep.rs[fluxFaceIndex]);
+                }
+                else {
+                    fluidState.setRs(0.0);
+                }
+                if (fluxFaceIndex < fluxStep.rv.size()) {
+                    fluidState.setRv(fluxStep.rv[fluxFaceIndex]);
+                }
+                else {
+                    fluidState.setRv(0.0);
+                }
+            }
+        }
+        if constexpr (enableDisgasInWater) {
+            if (FluidSystem::enableDissolvedGasInWater()) {
+                fluidState.setRsw(0.0);
+            }
+        }
+        if constexpr (enableVapwat) {
+            if (FluidSystem::enableVaporizedWater()) {
+                fluidState.setRvw(0.0);
+            }
+        }
+
+        // The pressures above are the exterior cell's, taken at its
+        // centre, but a boundary condition is imposed at the face and
+        // the discretisation carries it from there to this cell's
+        // centre. The leg from the exterior cell up to the face is
+        // nobody else's to walk, and skipping it imposes the exterior
+        // cell's pressure at a depth where the exterior cell does not
+        // have it. In a dipping layer that is metres of head: on one
+        // field it left an equilibrated sector with no wells open
+        // gaining a quarter of a bar everywhere in five days, and more
+        // than a bar against the steeper parts of the boundary.
+        //
+        // The correction wants densities, which are not known until the
+        // pressure is settled, so take them at the uncorrected pressure
+        // and let the loop below recompute them once it has moved. Over
+        // a few metres of head the second pass changes nothing that
+        // matters.
+        if (std::isfinite(fluxFace.exteriorDepth) && std::isfinite(targetDepth)) {
+            const auto dz = targetDepth - fluxFace.exteriorDepth;
+
+            if (dz != 0.0) {
+                const auto g = this->gravity()[dimWorld - 1];
+
+                for (unsigned activePhaseIdx = 0;
+                     activePhaseIdx < FluidSystem::numActivePhases(); ++activePhaseIdx)
+                {
+                    const auto phaseIdx =
+                        FluidSystem::activeToCanonicalPhaseIdx(activePhaseIdx);
+
+                    const auto rho =
+                        FluidSystem::density(fluidState, phaseIdx, pvtRegionIdx);
+
+                    fluidState.setPressure(phaseIdx,
+                                           fluidState.pressure(phaseIdx) + rho * g * dz);
+                }
+            }
+        }
+
+        for (unsigned activePhaseIdx = 0; activePhaseIdx < FluidSystem::numActivePhases(); ++activePhaseIdx) {
+            const auto phaseIdx = FluidSystem::activeToCanonicalPhaseIdx(activePhaseIdx);
+
+            const auto& b = FluidSystem::inverseFormationVolumeFactor(fluidState, phaseIdx, pvtRegionIdx);
+            fluidState.setInvB(phaseIdx, b);
+
+            const auto& rho = FluidSystem::density(fluidState, phaseIdx, pvtRegionIdx);
+            fluidState.setDensity(phaseIdx, rho);
+            if constexpr (energyModuleType == EnergyModules::FullyImplicitThermal) {
+                const auto& h = FluidSystem::enthalpy(fluidState, phaseIdx, pvtRegionIdx);
+                fluidState.setEnthalpy(phaseIdx, h);
+            }
+        }
+
+        fluidState.checkDefined();
+        return fluidState;
+    }
+
     InitialFluidState boundaryFluidState(unsigned globalDofIdx, const int directionId) const
     {
         OPM_TIMEBLOCK_LOCAL(boundaryFluidState, Subsystem::Assembly);
@@ -1210,178 +1395,9 @@ public:
             const auto fluxSlot = this->fluxBoundaryFaceSlot_(globalDofIdx, dir);
             const auto fluxFaceIndex = static_cast<std::size_t>(fluxSlot - 1);
             if (fluxSlot > 0 && fluxFaceIndex < fluxStep->pressures.size()) {
-                InitialFluidState fluidState;
-
-                // The stream on the far side belongs to the parent's cell, not
-                // to this one, so its PVT region is the one the producing run
-                // recorded. Falling back to the interior region would evaluate
-                // the density, formation volume factor and viscosity of the
-                // inflow against the wrong tables.
-                const int pvtRegionIdx = (fluxFace->exteriorPvtRegion >= 0)
-                    ? fluxFace->exteriorPvtRegion
-                    : this->pvtRegionIndex(globalDofIdx);
-                fluidState.setPvtRegionIndex(pvtRegionIdx);
-
-                const auto& initialState = initialFluidStates_[globalDofIdx];
-                double sw = FluidSystem::phaseIsActive(waterPhaseIdx)
-                          ? initialState.saturation(waterPhaseIdx)
-                          : 0.0;
-                double sg = FluidSystem::phaseIsActive(gasPhaseIdx)
-                          ? initialState.saturation(gasPhaseIdx)
-                          : 0.0;
-
-                if (fluxFaceIndex < fluxStep->swat.size()) {
-                    sw = fluxStep->swat[fluxFaceIndex];
-                }
-                if (fluxFaceIndex < fluxStep->sgas.size()) {
-                    sg = fluxStep->sgas[fluxFaceIndex];
-                }
-
-                sw = std::clamp(sw, 0.0, 1.0);
-                sg = std::clamp(sg, 0.0, 1.0);
-                const double so = std::clamp(1.0 - sw - sg, 0.0, 1.0);
-
-                if (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)) {
-                    fluidState.setSaturation(FluidSystem::waterPhaseIdx, sw);
-                }
-                if (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
-                    fluidState.setSaturation(FluidSystem::gasPhaseIdx, sg);
-                }
-                if (FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)) {
-                    fluidState.setSaturation(FluidSystem::oilPhaseIdx, so);
-                }
-                fluidState.setTotalSaturation(1.0);
-
-                const double pressure = fluxStep->pressures[fluxFaceIndex];
-
-                // Capillary pressure of the exterior cell, relative to the
-                // reference phase. The producing run recorded it because
-                // recomputing it here would use this cell's saturation-function
-                // region, scaled end points and hysteresis state, none of which
-                // describe the cell the pressure came from.
-                std::array<Scalar, numPhases> pc = {0};
-                const auto numPhaseSlots =
-                    static_cast<std::size_t>(fluxData->header.numPhases);
-                const auto pcBase = fluxFaceIndex * numPhaseSlots;
-                if (fluxStep->capPressure.size() >= pcBase + numPhaseSlots) {
-                    std::size_t slot = 0;
-                    const auto load = [&](const unsigned phaseIdx)
-                    {
-                        if (FluidSystem::phaseIsActive(phaseIdx)) {
-                            pc[phaseIdx] = fluxStep->capPressure[pcBase + slot];
-                            ++slot;
-                        }
-                    };
-                    load(oilPhaseIdx);
-                    load(waterPhaseIdx);
-                    load(gasPhaseIdx);
-                }
-                else {
-                    const auto& matParams = this->materialLawParams(globalDofIdx);
-                    MaterialLaw::capillaryPressures(pc, matParams, fluidState);
-                }
-
-                Valgrind::CheckDefined(pressure);
-                Valgrind::CheckDefined(pc);
-                for (unsigned activePhaseIdx = 0; activePhaseIdx < FluidSystem::numActivePhases(); ++activePhaseIdx) {
-                    const auto phaseIdx = FluidSystem::activeToCanonicalPhaseIdx(activePhaseIdx);
-                    if (Indices::oilEnabled)
-                        fluidState.setPressure(phaseIdx, pressure + (pc[phaseIdx] - pc[oilPhaseIdx]));
-                    else if (Indices::gasEnabled)
-                        fluidState.setPressure(phaseIdx, pressure + (pc[phaseIdx] - pc[gasPhaseIdx]));
-                    else if (Indices::waterEnabled)
-                        fluidState.setPressure(phaseIdx, pressure);
-                }
-
-                if constexpr (energyModuleType != EnergyModules::NoTemperature) {
-                    double temperature = initialState.temperature(0);
-                    if (fluxFaceIndex < fluxStep->temperature.size()) {
-                        temperature = fluxStep->temperature[fluxFaceIndex];
-                    }
-                    fluidState.setTemperature(temperature);
-                }
-
-                if constexpr (enableDissolvedGas) {
-                    if (FluidSystem::enableDissolvedGas()) {
-                        if (fluxFaceIndex < fluxStep->rs.size()) {
-                            fluidState.setRs(fluxStep->rs[fluxFaceIndex]);
-                        }
-                        else {
-                            fluidState.setRs(0.0);
-                        }
-                        if (fluxFaceIndex < fluxStep->rv.size()) {
-                            fluidState.setRv(fluxStep->rv[fluxFaceIndex]);
-                        }
-                        else {
-                            fluidState.setRv(0.0);
-                        }
-                    }
-                }
-                if constexpr (enableDisgasInWater) {
-                    if (FluidSystem::enableDissolvedGasInWater()) {
-                        fluidState.setRsw(0.0);
-                    }
-                }
-                if constexpr (enableVapwat) {
-                    if (FluidSystem::enableVaporizedWater()) {
-                        fluidState.setRvw(0.0);
-                    }
-                }
-
-                // The pressures above are the exterior cell's, taken at its
-                // centre, but a boundary condition is imposed at the face and
-                // the discretisation carries it from there to this cell's
-                // centre. The leg from the exterior cell up to the face is
-                // nobody else's to walk, and skipping it imposes the exterior
-                // cell's pressure at a depth where the exterior cell does not
-                // have it. In a dipping layer that is metres of head: on one
-                // field it left an equilibrated sector with no wells open
-                // gaining a quarter of a bar everywhere in five days, and more
-                // than a bar against the steeper parts of the boundary.
-                //
-                // The correction wants densities, which are not known until the
-                // pressure is settled, so take them at the uncorrected pressure
-                // and let the loop below recompute them once it has moved. Over
-                // a few metres of head the second pass changes nothing that
-                // matters.
-                if (std::isfinite(fluxFace->exteriorDepth)) {
-                    const auto dz = this->fluxBoundaryFaceDepthAt_(globalDofIdx, dir)
-                        - fluxFace->exteriorDepth;
-
-                    if (dz != 0.0) {
-                        const auto g = this->gravity()[dimWorld - 1];
-
-                        for (unsigned activePhaseIdx = 0;
-                             activePhaseIdx < FluidSystem::numActivePhases(); ++activePhaseIdx)
-                        {
-                            const auto phaseIdx =
-                                FluidSystem::activeToCanonicalPhaseIdx(activePhaseIdx);
-
-                            const auto rho =
-                                FluidSystem::density(fluidState, phaseIdx, pvtRegionIdx);
-
-                            fluidState.setPressure(phaseIdx,
-                                                   fluidState.pressure(phaseIdx) + rho * g * dz);
-                        }
-                    }
-                }
-
-                for (unsigned activePhaseIdx = 0; activePhaseIdx < FluidSystem::numActivePhases(); ++activePhaseIdx) {
-                    const auto phaseIdx = FluidSystem::activeToCanonicalPhaseIdx(activePhaseIdx);
-
-                    const auto& b = FluidSystem::inverseFormationVolumeFactor(fluidState, phaseIdx, pvtRegionIdx);
-                    fluidState.setInvB(phaseIdx, b);
-
-                    const auto& rho = FluidSystem::density(fluidState, phaseIdx, pvtRegionIdx);
-                    fluidState.setDensity(phaseIdx, rho);
-                    if constexpr (energyModuleType == EnergyModules::FullyImplicitThermal) {
-                        const auto& h = FluidSystem::enthalpy(fluidState, phaseIdx, pvtRegionIdx);
-                        fluidState.setEnthalpy(phaseIdx, h);
-                    }
-                }
-
-                fluidState.checkDefined();
-                return fluidState;
+                return this->fluxExteriorFluidState_(*fluxData, *fluxStep, *fluxFace,
+                                                     fluxFaceIndex, globalDofIdx,
+                                                     this->fluxBoundaryFaceDepthAt_(globalDofIdx, dir));
             }
         }
 
@@ -1691,7 +1707,9 @@ private:
     //!   conversions happen here. The reference density is the interior cell's,
     //!   which is the one the producing run used to form the mass, so the round
     //!   trip is exact.
-    void addFluxNncSource_(RateVector& rate, const unsigned globalDofIdx) const
+    void addFluxNncSource_(RateVector& rate,
+                           const unsigned globalDofIdx,
+                           const unsigned timeIdx) const
     {
         const auto& faces = this->fluxNncFacesAt_(globalDofIdx);
         if (faces.empty()) {
@@ -1707,6 +1725,8 @@ private:
         const auto fluxEnabled = (static_cast<int>(fluxData->header.mode)
                                   & static_cast<int>(EclIO::FluxFile::Mode::Flux)) != 0;
         if (!fluxEnabled) {
+            this->addFluxNncPressureSource_(rate, globalDofIdx, timeIdx,
+                                            faces, *fluxData, *fluxStep);
             return;
         }
 
@@ -1760,6 +1780,161 @@ private:
             if (fluxData->header.hasPhase(EclIO::FluxFile::Phase::Gas)) {
                 add(base + phaseSlot, gasPhaseIdx, gasCompIdx);
             }
+        }
+    }
+
+    //! \brief Flow through the NNC boundary faces of a pressure-mode sector.
+    //!
+    //! \details A directional boundary face is imposed through the grid face
+    //!   it sits on, and the discretisation works out the flux across it. An
+    //!   NNC has no such face here, the cell on the far side having gone with
+    //!   the rest of the outside, so the flux is worked out here instead and
+    //!   enters as a source. It is the two-point flux the parent would have
+    //!   computed across the same connection: its transmissibility, the
+    //!   exterior cell's recorded state as the far end, the average density
+    //!   for the gravity head between the two cell centres, the threshold
+    //!   pressure if there is one, and the upstream cell's mobility and
+    //!   formation volume factors. The interior end is this cell's current
+    //!   state, derivatives and all, so the connection is as implicit as the
+    //!   rest of the boundary.
+    //!
+    //!   Black-oil components only; water-borne gas, solvent, polymer and
+    //!   energy are not carried across.
+    void addFluxNncPressureSource_(RateVector& rate,
+                                   const unsigned globalDofIdx,
+                                   const unsigned timeIdx,
+                                   const std::vector<int>& faces,
+                                   const EclIO::FluxFile::Data& fluxData,
+                                   const EclIO::FluxFile::ReportStep& fluxStep) const
+    {
+        using Evaluation = typename FlowProblemType::Evaluation;
+
+        const auto pressureEnabled = (static_cast<int>(fluxData.header.mode)
+                                      & static_cast<int>(EclIO::FluxFile::Mode::Pressure)) != 0;
+        if (!pressureEnabled || !this->fluxBoundary_) {
+            return;
+        }
+
+        const auto& allFaces = this->fluxBoundary_->faces();
+        const auto volume = this->model().dofTotalVolume(globalDofIdx);
+        if (!(volume > 0.0)) {
+            return;
+        }
+
+        const auto& intQuants = this->model().intensiveQuantities(globalDofIdx, timeIdx);
+        const auto& fsIn = intQuants.fluidState();
+        const auto pvtRegionIn = this->pvtRegionIndex(globalDofIdx);
+        const auto zIn = this->dofCenterDepth(globalDofIdx);
+        const auto g = this->gravity()[dimWorld - 1];
+        const auto numPhaseSlots = static_cast<std::size_t>(fluxData.header.numPhases);
+
+        for (const auto faceIndexInt : faces) {
+            const auto faceIndex = static_cast<std::size_t>(faceIndexInt);
+            if ((faceIndexInt < 0) || (faceIndex >= allFaces.size())
+                || (faceIndex >= fluxStep.pressures.size()))
+            {
+                continue;
+            }
+
+            const auto& face = allFaces[faceIndex];
+            if (!std::isfinite(face.transmissibility) || !(face.transmissibility > 0.0)) {
+                continue;
+            }
+
+            const auto exFs = this->fluxExteriorFluidState_(fluxData, fluxStep, face, faceIndex,
+                                                            globalDofIdx,
+                                                            std::numeric_limits<Scalar>::quiet_NaN());
+            const auto zEx = std::isfinite(face.exteriorDepth) ? face.exteriorDepth : zIn;
+
+            // The exterior cell's relative permeabilities, as recorded, or this
+            // cell's curves at the exterior saturations when they were not.
+            std::array<Scalar, numPhases> krEx{};
+            const auto krBase = faceIndex * numPhaseSlots;
+            if (fluxStep.relPerm.size() >= krBase + numPhaseSlots) {
+                std::size_t slot = 0;
+                for (const unsigned phaseIdx : {unsigned{oilPhaseIdx},
+                                                unsigned{waterPhaseIdx},
+                                                unsigned{gasPhaseIdx}}) {
+                    if (FluidSystem::phaseIsActive(phaseIdx)) {
+                        krEx[phaseIdx] = fluxStep.relPerm[krBase + slot];
+                        ++slot;
+                    }
+                }
+            }
+            else {
+                MaterialLaw::relativePermeabilities(krEx, this->materialLawParams(globalDofIdx), exFs);
+            }
+
+            std::array<Evaluation, numPhases> surfaceRate{};
+            const auto upstreamRates = [&](const unsigned phaseIdx,
+                                           const Evaluation& reservoirRate,
+                                           const auto& fs)
+            {
+                const auto b = fs.invB(phaseIdx);
+                surfaceRate[phaseIdx] += reservoirRate * b;
+
+                if (!FluidSystem::phaseIsActive(oilPhaseIdx)
+                    || !FluidSystem::phaseIsActive(gasPhaseIdx))
+                {
+                    return;
+                }
+                if (phaseIdx == oilPhaseIdx && FluidSystem::enableDissolvedGas()) {
+                    surfaceRate[gasPhaseIdx] += reservoirRate * b * fs.Rs();
+                }
+                if (phaseIdx == gasPhaseIdx && FluidSystem::enableVaporizedOil()) {
+                    surfaceRate[oilPhaseIdx] += reservoirRate * b * fs.Rv();
+                }
+            };
+
+            for (unsigned activePhaseIdx = 0;
+                 activePhaseIdx < FluidSystem::numActivePhases(); ++activePhaseIdx)
+            {
+                const auto phaseIdx = FluidSystem::activeToCanonicalPhaseIdx(activePhaseIdx);
+
+                const Evaluation rhoAvg = (fsIn.density(phaseIdx) + exFs.density(phaseIdx)) / 2;
+                Evaluation dp = exFs.pressure(phaseIdx) + rhoAvg * (g * (zIn - zEx))
+                    - fsIn.pressure(phaseIdx);
+
+                const bool inflow = dp > 0.0;
+                const Scalar thpres =
+                    this->fluxFaceThresholdPressure_(globalDofIdx, face, /*interiorToExterior=*/!inflow);
+                if (thpres > 0.0) {
+                    if (std::abs(getValue(dp)) > thpres) {
+                        dp += inflow ? -thpres : thpres;
+                    }
+                    else {
+                        dp = 0.0;
+                    }
+                }
+
+                if (inflow) {
+                    const Scalar mobility = krEx[phaseIdx] / exFs.viscosity(phaseIdx);
+                    upstreamRates(phaseIdx, face.transmissibility * mobility * dp, exFs);
+                }
+                else {
+                    const auto trans = face.transmissibility
+                        * getValue(intQuants.rockCompTransMultiplier());
+                    upstreamRates(phaseIdx, trans * intQuants.mobility(phaseIdx) * dp, fsIn);
+                }
+            }
+
+            const auto add = [&](const unsigned phaseIdx, const unsigned compIdx)
+            {
+                if (!FluidSystem::phaseIsActive(phaseIdx)) {
+                    return;
+                }
+
+                auto componentRate = surfaceRate[phaseIdx] / volume;
+                if constexpr (!getPropValue<TypeTag, Properties::BlackoilConserveSurfaceVolume>()) {
+                    componentRate *= FluidSystem::referenceDensity(phaseIdx, pvtRegionIn);
+                }
+
+                rate[FluidSystem::canonicalToActiveCompIdx(compIdx)] += componentRate;
+            };
+
+            add(oilPhaseIdx, oilCompIdx);
+            add(waterPhaseIdx, waterCompIdx);
+            add(gasPhaseIdx, gasCompIdx);
         }
     }
 
@@ -1955,17 +2130,28 @@ public:
                                      unsigned boundaryFaceIdx,
                                      bool interiorToExterior) const
     {
+        const auto* face = this->fluxBoundaryFaceAtOrdinal_(globalSpaceIdx, boundaryFaceIdx);
+        return (face == nullptr)
+            ? Scalar{0}
+            : this->fluxFaceThresholdPressure_(globalSpaceIdx, *face, interiorToExterior);
+    }
+
+    //! \brief Threshold pressure across a sector boundary face, directional or
+    //!        NNC alike.
+    Scalar fluxFaceThresholdPressure_(const unsigned globalSpaceIdx,
+                                      const FluxBoundary::Face& face,
+                                      const bool interiorToExterior) const
+    {
         if (!this->thresholdPressures_.enableThresholdPressure()) {
             return 0.0;
         }
 
-        const auto* face = this->fluxBoundaryFaceAtOrdinal_(globalSpaceIdx, boundaryFaceIdx);
-        if ((face == nullptr) || (face->exteriorEquilRegion < 0)) {
+        if (face.exteriorEquilRegion < 0) {
             return 0.0;
         }
 
         const auto interiorRegion = this->thresholdPressures_.equilRegionIndex(globalSpaceIdx);
-        const auto exteriorRegion = static_cast<unsigned>(face->exteriorEquilRegion);
+        const auto exteriorRegion = static_cast<unsigned>(face.exteriorEquilRegion);
         const auto numRegions = this->thresholdPressures_.numEquilRegions();
 
         if ((interiorRegion >= numRegions) || (exteriorRegion >= numRegions)) {
