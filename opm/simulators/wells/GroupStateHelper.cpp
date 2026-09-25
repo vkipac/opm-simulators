@@ -1593,6 +1593,25 @@ GroupStateHelper<Scalar, IndexTraits>::wellRateContributionToGroup(const std::st
                                                                   const bool is_injector,
                                                                   const bool network) const
 {
+    if (const auto fixed = this->fixed_well_rates_.find(well_name);
+        fixed != this->fixed_well_rates_.end())
+    {
+        // Not simulated here, and hence in no rank's well state; rank 0 speaks
+        // for it, and the sum across the ranks does the rest.
+        if (!this->isRank0()) {
+            return 0.0;
+        }
+
+        const auto& well_ecl = this->schedule_.getWell(well_name, this->report_step_);
+        if ((well_ecl.isProducer() && is_injector) || (well_ecl.isInjector() && !is_injector))
+            return 0.0;
+
+        const auto canonical = this->phaseUsage().activeToCanonicalPhaseIdx(phase_pos);
+        const auto& rates = res_rates ? fixed->second.reservoir : fixed->second.surface;
+
+        return well_ecl.getEfficiencyFactor(network) * rates[canonical];
+    }
+
     const auto well_index = this->wellState().index(well_name);
     if (!well_index.has_value())
         return 0.0;
@@ -2932,6 +2951,23 @@ GroupStateHelper<Scalar, IndexTraits>::updateGroupTargetReductionRecursive_(
 
         if (well_tmp.isInjector() && !is_injector)
             continue;
+
+        // A well whose rates are fixed is not under group control, whatever
+        // its schedule says, so all of what it produces or injects comes off
+        // the group target before the rest is shared out.
+        if (const auto fixed = this->fixed_well_rates_.find(well_name);
+            fixed != this->fixed_well_rates_.end())
+        {
+            const bool choked = !is_injector && group.as_choke();
+            if (this->isRank0() && !choked) {
+                const Scalar efficiency = well_tmp.getEfficiencyFactor();
+                for (int phase = 0; phase < np; phase++) {
+                    const auto canonical = this->phaseUsage().activeToCanonicalPhaseIdx(phase);
+                    group_target_reduction[phase] += efficiency * fixed->second.surface[canonical];
+                }
+            }
+            continue;
+        }
 
         const auto well_index = this->wellState().index(well_name);
         if (!well_index.has_value())

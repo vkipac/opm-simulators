@@ -2,9 +2,11 @@
 set -euo pipefail
 
 # Two-well sector case: one producer inside the FLUX region and one outside,
-# sharing a group target that is driven by a UDQ. The sector run has to drop
-# the well outside the region and reduce the group target by what that well
-# produced in the parent run.
+# sharing a group target. The sector run has to drop the well outside the
+# region and still count what that well produced in the parent run against the
+# group, handing the well inside only what is left. The target is driven by a
+# UDQ in some of the decks and is a plain number in others; with a plain number
+# nothing but the group control itself can take the absent well into account.
 
 flow_bin="$1"
 compare_bin="$2"

@@ -287,6 +287,14 @@ public:
      */
     void beginEpisode() override
     {
+        // Before the well model sets up the report step's group controls, which
+        // need the wells outside the region to be counted already. Until the
+        // first time step is chosen this is the latest interval the parent has
+        // an average for, which is the best there is.
+        this->updateFluxFixedWellRates_(this->simulator().episodeIndex(),
+                                        static_cast<double>(this->simulator().episodeStartTime())
+                                        - static_cast<double>(this->simulator().startTime()));
+
         FlowProblemType::beginEpisode();
 
         auto& simulator = this->simulator();
@@ -317,9 +325,7 @@ public:
         this->actionHandler_
             .evalUDQAssignments(episodeIdx, vanguard.udqState());
 
-        if (episodeIdx >= 0) {
-            this->applyFluxGroupTargetCorrection_(episodeIdx, episodeStart);
-        }
+        this->restoreFluxGroupTargetUDQs_(episodeIdx);
 
         if (episodeIdx >= 0) {
             const auto& oilVap = schedule[episodeIdx].oilvap();
@@ -495,176 +501,186 @@ public:
         return absentWells;
     }
 
-    //! \brief Remove the contribution of wells outside the region from group
-    //!        production targets.
+    //! \brief Hand the well model the rates of the wells outside the region.
     //!
-    //! \details A group target in the parent deck is shared by every member of
-    //!          the group, but the sector only holds the members that lie
-    //!          inside the region. Seeding the summary state cannot fix this on
-    //!          its own: the target is a whole-group quantity, so without a
-    //!          reduction the sector members would take over the entire group
-    //!          target and produce far too much.
+    //! \details A group in the parent deck shares its target among all of its
+    //!          members, but only the members inside the region are simulated
+    //!          here. The others are still in the schedule, and what they
+    //!          produced in the parent run is known, so they take part in group
+    //!          control as wells on individual control at those rates: they
+    //!          count towards every group sum and come off every group target,
+    //!          and are never handed a share of one. Leaving them out entirely
+    //!          lets the sector's own wells take over the whole target, and any
+    //!          group limit, voidage replacement or sales target then sees a
+    //!          fraction of what the parent's did.
     //!
-    //!          The reduction is the parent run's production from the absent
-    //!          members, interpolated to the current time.
+    //!          The parent reports only a total reservoir volume per well. Every
+    //!          reader of a producer's reservoir rates sums them over phases, so
+    //!          it is booked against oil, or the first active phase without oil;
+    //!          an injector's goes to the phase it injects.
     //!
-    //!          Only the SummaryState is adjusted. The UDQ state is left alone
-    //!          so that recursive UDQ definitions keep evaluating exactly as
-    //!          they do in the parent run, and so that the subtraction cannot
-    //!          compound from one time step to the next.
-    void applyFluxGroupTargetCorrection_(const int episodeIdx, const double time)
+    //!          Collective, because deciding which wells are absent is.
+    void updateFluxFixedWellRates_(const int episodeIdx, const double time)
     {
         const auto* parent = this->fluxParentSummary_();
         if ((parent == nullptr) || (episodeIdx < 0)) {
             return;
         }
 
+        using Helper = std::remove_reference_t<decltype(this->wellModel_.groupStateHelper())>;
+        using FixedRates = typename Helper::FixedWellRates;
+
+        const auto& schedule = this->simulator().vanguard().schedule();
+        const auto& units = this->simulator().vanguard().eclState().getUnits();
+        const auto stepIdx = static_cast<std::size_t>(episodeIdx);
+
+        // The parent's summary is in the deck's output units; the well model
+        // works in SI.
+        const auto rate = [parent, time, &units](const std::string& key,
+                                                 const UnitSystem::measure measure)
+        {
+            const auto value = parent->valueAt(key, time);
+            return std::isfinite(value) ? units.to_si(measure, value) : 0.0;
+        };
+
+        const auto firstActive = [](std::initializer_list<unsigned> phases)
+        {
+            for (const auto phaseIdx : phases) {
+                if (FluidSystem::phaseIsActive(phaseIdx)) {
+                    return phaseIdx;
+                }
+            }
+            return *phases.begin();
+        };
+
+        std::unordered_map<std::string, FixedRates> fixed;
+        for (const auto& wellName : this->fluxAbsentWellNames_(stepIdx)) {
+            const auto& well = schedule.getWell(wellName, stepIdx);
+            const auto suffix = std::string{well.isInjector() ? "IR:" : "PR:"} + wellName;
+
+            using M = UnitSystem::measure;
+
+            FixedRates rates{};
+            if (FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)) {
+                rates.surface[FluidSystem::oilPhaseIdx] = rate("WO" + suffix, M::liquid_surface_rate);
+            }
+            if (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)) {
+                rates.surface[FluidSystem::waterPhaseIdx] = rate("WW" + suffix, M::liquid_surface_rate);
+            }
+            if (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
+                rates.surface[FluidSystem::gasPhaseIdx] = rate("WG" + suffix, M::gas_surface_rate);
+            }
+
+            const auto bookedTo = [&well, &firstActive]()
+            {
+                if (!well.isInjector()) {
+                    return firstActive({FluidSystem::oilPhaseIdx,
+                                        FluidSystem::waterPhaseIdx,
+                                        FluidSystem::gasPhaseIdx});
+                }
+
+                switch (well.injectorType()) {
+                case InjectorType::GAS:
+                    return static_cast<unsigned>(FluidSystem::gasPhaseIdx);
+                case InjectorType::OIL:
+                    return static_cast<unsigned>(FluidSystem::oilPhaseIdx);
+                default:
+                    return static_cast<unsigned>(FluidSystem::waterPhaseIdx);
+                }
+            }();
+
+            rates.reservoir[bookedTo] = rate("WV" + suffix, M::rate);
+
+            fixed.emplace(wellName, rates);
+        }
+
+        this->wellModel_.groupStateHelper().setFixedWellRates(std::move(fixed));
+    }
+
+    //! \brief Put back this run's own value of every UDQ that sets a group
+    //!        target, over the one the parent summary seeded.
+    //!
+    //! \details The seed is taken at the end of the time step, which is right
+    //!          for a rate -- the parent's rate over the step -- but not for a
+    //!          UDQ read as a target: the parent's group control ran on the
+    //!          value from the start of the step, and a DEFINE evaluated once
+    //!          per step has moved on by the end of it. The UDQ state holds the
+    //!          start-of-step value, as evaluated here.
+    //!
+    //!          Only the I/O rank has it, though. evalSummary() evaluates the
+    //!          UDQs there and shares only the summary state afterwards, which
+    //!          leaves every other rank with whatever it was handed when the
+    //!          deck was distributed, and the group would then be driven to a
+    //!          different target on each. Hence the broadcast, which is why this
+    //!          has to be reached on every rank.
+    void restoreFluxGroupTargetUDQs_(const int episodeIdx)
+    {
+        if ((this->fluxParentSummary_() == nullptr) || (episodeIdx < 0)) {
+            return;
+        }
+
         auto& vanguard = this->simulator().vanguard();
-        auto& summaryState = vanguard.summaryState();
-        const auto& udqState = vanguard.udqState();
         const auto& schedule = vanguard.schedule();
         const auto stepIdx = static_cast<std::size_t>(episodeIdx);
 
-        const auto absentWells = this->fluxAbsentWellNames_(stepIdx);
-        if (absentWells.empty()) {
-            return;
-        }
-
-        const auto inGroup = [&schedule, stepIdx](const std::string& wellName,
-                                                  const std::string& groupName)
+        // In the order the groups come out of the schedule, so that every rank
+        // builds the same list.
+        std::vector<std::string> udqNames;
+        std::unordered_set<std::string> seen;
+        const auto note = [&udqNames, &seen](const UDAValue& target)
         {
-            if (!schedule.hasWell(wellName, stepIdx)) {
-                return false;
+            if (target.is<std::string>() && seen.insert(target.get<std::string>()).second) {
+                udqNames.push_back(target.get<std::string>());
             }
-
-            auto currentGroup = schedule.getWell(wellName, stepIdx).groupName();
-            while (!currentGroup.empty()) {
-                if (currentGroup == groupName) {
-                    return true;
-                }
-
-                if (!schedule.hasGroup(currentGroup, stepIdx)) {
-                    break;
-                }
-
-                const auto parentGroup = schedule.getGroup(currentGroup, stepIdx).flow_group();
-                if (!parentGroup.has_value()) {
-                    break;
-                }
-
-                currentGroup = *parentGroup;
-            }
-
-            return false;
-        };
-
-        std::unordered_set<std::string> correctedTargets;
-
-        // The UDA targets to correct, in the order the groups come out of the
-        // schedule, so that every rank builds the same list.
-        struct Target {
-            std::string udqName;
-            std::string groupName;
-            std::string ratePrefix;
-        };
-
-        std::vector<Target> targets;
-
-        const auto noteTarget = [&](const UDAValue& target,
-                                    const std::string& groupName,
-                                    const std::string& ratePrefix)
-        {
-            if (!target.is<std::string>()) {
-                // A literal target cannot be rewritten here; the group control
-                // itself would have to be modified.
-                return;
-            }
-
-            auto udqName = target.get<std::string>();
-            if (!correctedTargets.insert(udqName).second) {
-                return;
-            }
-
-            targets.push_back({std::move(udqName), groupName, ratePrefix});
         };
 
         for (const auto& groupName : schedule.groupNames(stepIdx)) {
-            if (!schedule.hasGroup(groupName, stepIdx)) {
-                continue;
-            }
-
             const auto& group = schedule.getGroup(groupName, stepIdx);
-            if (!group.isProductionGroup()) {
-                continue;
+
+            if (group.isProductionGroup()) {
+                const auto& production = group.productionProperties();
+                note(production.oil_target);
+                note(production.water_target);
+                note(production.gas_target);
+                note(production.liquid_target);
+                note(production.resv_target);
             }
 
-            const auto& production = group.productionProperties();
-            noteTarget(production.oil_target, groupName, "WOPR:");
-            noteTarget(production.water_target, groupName, "WWPR:");
-            noteTarget(production.gas_target, groupName, "WGPR:");
-            noteTarget(production.liquid_target, groupName, "WLPR:");
+            if (group.isInjectionGroup()) {
+                for (const auto& [phase, injection] : group.injectionProperties()) {
+                    note(injection.surface_max_rate);
+                    note(injection.resv_max_rate);
+                    note(injection.target_reinj_fraction);
+                    note(injection.target_void_fraction);
+                }
+            }
         }
 
-        if (targets.empty()) {
+        if (udqNames.empty()) {
             return;
         }
 
-        // Read the uncorrected value from the UDQ state rather than the summary
-        // state: the summary value may already hold the correction from an
-        // earlier time step, and subtracting again would compound.
-        //
-        // Only the I/O rank has it, though. evalSummary() evaluates the UDQs
-        // there and shares the summary state afterwards but not the UDQ state,
-        // which elsewhere leaves every other rank with whatever it was handed
-        // when the deck was distributed. Taken at face value that skips the
-        // correction on all but one rank -- the others do not even find the
-        // quantity -- and the group is then driven to a different target on
-        // each. Hence the broadcast, which is why this has to be reached on
-        // every rank.
         const auto& comm = vanguard.grid().comm();
-
-        auto uncorrected = std::vector<double>(targets.size(),
-                                               std::numeric_limits<double>::quiet_NaN());
+        auto values = std::vector<double>(udqNames.size(),
+                                          std::numeric_limits<double>::quiet_NaN());
 
         if (comm.rank() == 0) {
-            std::transform(targets.begin(), targets.end(), uncorrected.begin(),
-                           [&udqState](const Target& target)
+            const auto& udqState = vanguard.udqState();
+            std::transform(udqNames.begin(), udqNames.end(), values.begin(),
+                           [&udqState](const std::string& name)
                            {
-                               return udqState.has(target.udqName)
-                                   ? udqState.get(target.udqName)
+                               return udqState.has(name)
+                                   ? udqState.get(name)
                                    : std::numeric_limits<double>::quiet_NaN();
                            });
         }
 
-        comm.broadcast(uncorrected.data(), static_cast<int>(uncorrected.size()), 0);
+        comm.broadcast(values.data(), static_cast<int>(values.size()), 0);
 
-        for (std::size_t i = 0; i < targets.size(); ++i) {
-            if (!std::isfinite(uncorrected[i])) {
-                // Nothing defines this quantity yet.
-                continue;
-            }
-
-            const auto& target = targets[i];
-
-            double absentRate = 0.0;
-            for (const auto& wellName : absentWells) {
-                if (!inGroup(wellName, target.groupName)) {
-                    continue;
-                }
-
-                const auto rate = parent->valueAt(target.ratePrefix + wellName, time);
-                if (std::isfinite(rate)) {
-                    absentRate += rate;
-                }
-            }
-
-            if (!(std::abs(absentRate) > 0.0)) {
-                continue;
-            }
-
-            const auto corrected = uncorrected[i] - absentRate;
-            if (std::isfinite(corrected)) {
-                summaryState.set(target.udqName, corrected);
+        auto& summaryState = vanguard.summaryState();
+        for (std::size_t i = 0; i < udqNames.size(); ++i) {
+            if (std::isfinite(values[i])) {
+                summaryState.set(udqNames[i], values[i]);
             }
         }
     }
@@ -674,6 +690,12 @@ public:
      */
     void beginTimeStep() override
     {
+        // Ahead of the base class, which starts the well model's time step and
+        // with it the group controls. Refreshed per time step, not per report
+        // step, because the parent's rates are averages over its own steps.
+        this->updateFluxFixedWellRates_(this->simulator().episodeIndex(),
+                                        this->fluxParentSummaryTime_());
+
         FlowProblemType::beginTimeStep();
 
         // Seed the summary state from the parent run before anything reads it.
@@ -683,7 +705,7 @@ public:
         const auto time = this->fluxParentSummaryTime_();
         this->refreshFluxBoundaryRecord_(time);
         this->seedParentSummaryState_(time);
-        this->applyFluxGroupTargetCorrection_(this->simulator().episodeIndex(), time);
+        this->restoreFluxGroupTargetUDQs_(this->simulator().episodeIndex());
 
         hybridNewton_.tryApplyHybridNewton();
     }

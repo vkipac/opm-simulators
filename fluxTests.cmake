@@ -455,6 +455,20 @@ set(_make_flux_fluxnum_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow
         -p "bash ${PROJECT_SOURCE_DIR}/tests/check-twowell-useflux-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_COMPARE_ECL_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_DUMPFLUX_FLUX_1D.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_USEFLUX_FLUX_1D.DATA"
     )
 
+    set(_twowell_useflux_grup_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+twowell_useflux_grup_smoke)
+
+    opm_add_test(twowell_useflux_grup_smoke
+      DEPENDS
+        flux_smoke_shape_check
+      EXE_TARGET
+        flow_blackoil
+      DRIVER_ARGS
+        -i ${PROJECT_SOURCE_DIR}/tests/data/sector
+        -r ${_twowell_useflux_grup_result_path}
+        -f TWOWELL_DUMPFLUX_GRUP_1D
+        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-twowell-useflux-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_COMPARE_ECL_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_DUMPFLUX_GRUP_1D.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_USEFLUX_GRUP_1D.DATA"
+    )
+
     set(_twowell_useflux_live_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+twowell_useflux_live_smoke)
 
     opm_add_test(twowell_useflux_live_smoke
