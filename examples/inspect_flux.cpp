@@ -36,6 +36,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -54,6 +55,7 @@ struct Options {
     int k = 0;
     int precision = 6;
     std::string startDate;
+    std::vector<std::string> summaryKeys;
     bool help = false;
 };
 
@@ -61,6 +63,7 @@ void printUsage()
 {
     std::cout
         << "usage: inspect_flux <file.FLUX> <i> <j> <k> [options]\n"
+        << "       inspect_flux <file.FLUX> --summary=<KEY[,KEY...]> [options]\n"
         << "\n"
         << "Writes the boundary data a FLUX file carries for one cell as a time\n"
         << "series, one row per record in the file. The cell is given as a 1-based\n"
@@ -76,6 +79,10 @@ void printUsage()
         << "transmissibilities go to stderr, so that stdout stays a clean table.\n"
         << "\n"
         << "options:\n"
+        << "  --summary=<KEY[,KEY...]>   Instead of a cell, list the embedded summary\n"
+        << "                             samples of these keys, one row per sample,\n"
+        << "                             in the parent's output units. The summary has\n"
+        << "                             its own times, independent of the records.\n"
         << "  --start-date=<YYYY-MM-DD>  Report the first column as a date rather\n"
         << "                             than as days elapsed. A FLUX file records\n"
         << "                             no start date, so it has to be supplied.\n"
@@ -129,6 +136,17 @@ Options parseOptions(int argc, char** argv)
         else if (startsWith(arg, "--start-date=")) {
             opt.startDate = valueAfterEquals(arg);
         }
+        else if (startsWith(arg, "--summary=")) {
+            std::string keys = valueAfterEquals(arg);
+            std::size_t pos = 0;
+            while (pos <= keys.size()) {
+                const auto comma = std::min(keys.find(',', pos), keys.size());
+                if (comma > pos) {
+                    opt.summaryKeys.push_back(keys.substr(pos, comma - pos));
+                }
+                pos = comma + 1;
+            }
+        }
         else if (startsWith(arg, "-")) {
             throw std::invalid_argument("unrecognized argument '" + arg + "'");
         }
@@ -138,6 +156,15 @@ Options parseOptions(int argc, char** argv)
     }
 
     if (opt.help) {
+        return opt;
+    }
+
+    if (!opt.summaryKeys.empty()) {
+        if (positional.size() != 1U) {
+            throw std::invalid_argument("--summary takes just <file.FLUX>, got "
+                                        + std::to_string(positional.size()) + " positional argument(s)");
+        }
+        opt.file = positional[0];
         return opt;
     }
 
@@ -262,6 +289,35 @@ int run(const Options& opt)
 
     const auto data = Opm::EclIO::FluxFile::read(opt.file);
     const auto& header = data.header;
+
+    if (!opt.summaryKeys.empty()) {
+        std::vector<std::size_t> columns;
+        for (const auto& key : opt.summaryKeys) {
+            const auto it = std::find(data.summaryKeys.begin(), data.summaryKeys.end(), key);
+            if (it == data.summaryKeys.end()) {
+                throw std::invalid_argument("summary key '" + key + "' is not embedded in '"
+                                            + opt.file + "'");
+            }
+            columns.push_back(static_cast<std::size_t>(std::distance(data.summaryKeys.begin(), it)));
+        }
+
+        std::cout << "#" << std::setw(13) << "TIME";
+        for (const auto& key : opt.summaryKeys) {
+            std::cout << ' ' << std::setw(14) << key;
+        }
+        std::cout << "\n#" << std::setw(13) << "DAYS" << '\n';
+
+        std::cout << std::setprecision(opt.precision);
+        for (const auto& sample : data.summarySamples) {
+            std::cout << std::setw(14) << sample.time / secondsPerDay;
+            for (const auto column : columns) {
+                std::cout << ' ' << std::setw(14) << sample.values[column];
+            }
+            std::cout << '\n';
+        }
+
+        return EXIT_SUCCESS;
+    }
 
     const auto nx = static_cast<long long>(header.parentNx);
     const auto ny = static_cast<long long>(header.parentNy);

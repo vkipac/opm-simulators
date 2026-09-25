@@ -133,6 +133,43 @@ BOOST_AUTO_TEST_CASE(RateHoldIsIntegralPreserving)
     BOOST_CHECK_CLOSE(held * (30.0 - 20.0), producedFromCumulative, 1e-12);
 }
 
+BOOST_AUTO_TEST_CASE(RateOverAnIntervalIsItsAverage)
+{
+    const auto summary = makeSummary();
+
+    // A step spanning several samples has to see what the parent produced
+    // over the whole of it, not the rate of its last sample: that is what a
+    // cumulative built from the rate adds up to. Over (10, 30] the parent made
+    // 160 - 100 = 60 in 20 seconds, where the rate at 30 alone says 4.0.
+    BOOST_CHECK_CLOSE(summary.valueOver("WOPR:P1", 10.0, 30.0), 3.0, 1e-12);
+    BOOST_CHECK_CLOSE(summary.valueOver("WOPR:P1", 10.0, 30.0) * 20.0,
+                      summary.valueAt("WOPT:P1", 30.0) - summary.valueAt("WOPT:P1", 10.0),
+                      1e-12);
+
+    // Straddling a sample, half in each interval.
+    BOOST_CHECK_CLOSE(summary.valueOver("WOPR:P1", 15.0, 25.0), 3.0, 1e-12);
+
+    // Inside a single interval it is that interval's value.
+    BOOST_CHECK_CLOSE(summary.valueOver("WOPR:P1", 21.0, 29.0), 4.0, 1e-12);
+
+    // Reaching past the last sample holds the last value there.
+    BOOST_CHECK_CLOSE(summary.valueOver("WOPR:P1", 20.0, 40.0), 4.0, 1e-12);
+}
+
+BOOST_AUTO_TEST_CASE(NonRateOverAnIntervalIsItsEndValue)
+{
+    const auto summary = makeSummary();
+
+    BOOST_CHECK_CLOSE(summary.valueOver("WBHP:P1", 15.0, 25.0),
+                      summary.valueAt("WBHP:P1", 25.0), 1e-12);
+    BOOST_CHECK_CLOSE(summary.valueOver("WOPT:P1", 15.0, 25.0),
+                      summary.valueAt("WOPT:P1", 25.0), 1e-12);
+
+    // An empty interval is just a point.
+    BOOST_CHECK_CLOSE(summary.valueOver("WOPR:P1", 25.0, 25.0),
+                      summary.valueAt("WOPR:P1", 25.0), 1e-12);
+}
+
 BOOST_AUTO_TEST_CASE(TotalIsInterpolatedLinearly)
 {
     const auto summary = makeSummary();

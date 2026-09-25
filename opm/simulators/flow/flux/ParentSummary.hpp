@@ -80,6 +80,20 @@ public:
     /// Returns NaN when \p key is not present.
     double valueAt(const std::string& key, double time) const;
 
+    /// Value of \p key over the interval (\p start, \p end], in seconds.
+    ///
+    /// For a rate this is the time average over the interval, taken across
+    /// however many samples it spans. The parent's samples need not line up
+    /// with the steps asking for them: a reduced run may step over several of
+    /// them at once, and the rate at the end of the step then describes only
+    /// the last sliver of it, where the average is what the parent actually
+    /// produced over the step and what a cumulative built from it has to add
+    /// up to. Everything else, and an empty interval, is valueAt(\p end).
+    ///
+    /// Intervals, or parts of them, where the value is NaN are left out of the
+    /// average; NaN when nothing is left.
+    double valueOver(const std::string& key, double start, double end) const;
+
     const std::vector<std::string>& keys() const { return this->keys_; }
     const std::vector<double>& times() const { return this->times_; }
 

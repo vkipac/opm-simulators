@@ -2732,6 +2732,14 @@ private:
         const auto stepIdx =
             static_cast<std::size_t>(std::max(this->simulator_.episodeIndex(), 0));
 
+        // The rates go into this step's cumulatives, so they have to be the
+        // parent's average over the interval since the summary was last
+        // evaluated, however many of the parent's own samples that spans.
+        const auto start = (this->fluxParentOutputTime_ < 0.0)
+            ? static_cast<double>(time)
+            : this->fluxParentOutputTime_;
+        this->fluxParentOutputTime_ = static_cast<double>(time);
+
         for (const auto& wellName : schedule.wellNames(stepIdx)) {
             const auto& well = schedule.getWell(wellName, stepIdx);
 
@@ -2758,7 +2766,7 @@ private:
                                     const std::string& injKeyword)
             {
                 const auto key = (isProducer ? prodKeyword : injKeyword) + ':' + wellName;
-                const auto value = parent->valueAt(key, static_cast<double>(time));
+                const auto value = parent->valueOver(key, start, static_cast<double>(time));
 
                 if (std::isfinite(value)) {
                     target.rates.set(opt, sign * units.to_si(measure, value));
@@ -2798,6 +2806,9 @@ private:
     std::vector<SummaryConfigNode::Type> fluxSummaryKeyTypes_;
     std::vector<double> fluxSummaryRateAccum_;
     double fluxSummaryAccumDt_ = 0.0;
+    //! When the parent-only wells were last given rates, or negative before
+    //! the first time. See injectParentOnlyWellData_().
+    double fluxParentOutputTime_ = -1.0;
     double fluxSummaryLastSampleTime_ = 0.0;
     double fluxSummaryMinInterval_ = 0.0;
     bool fluxSummaryHasSample_ = false;

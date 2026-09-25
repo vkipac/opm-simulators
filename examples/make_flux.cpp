@@ -41,6 +41,7 @@
 #include <opm/simulators/flow/flux/FluxDumper.hpp>
 #include <opm/simulators/flow/flux/FluxRegions.hpp>
 #include <opm/simulators/flow/flux/FluxSummaryKeys.hpp>
+#include <opm/simulators/flow/flux/ParentSummary.hpp>
 #include <opm/simulators/utils/readDeck.hpp>
 
 #include <algorithm>
@@ -76,6 +77,7 @@ struct Options {
     std::string summary;
     std::string parsingStrictness = "normal";
     std::vector<std::string> summaryDefines;
+    double summaryMinInterval = 0.0;    //!< Days; zero keeps every summary step.
     bool noSummary = false;
     bool help = false;
 };
@@ -89,10 +91,20 @@ struct ParentInput {
     std::optional<fs::path> summaryPath;
 };
 
+//! The parent's summary at every step it wrote, not just at report steps.
+//!
+//! The boundary can only be described where the parent wrote a restart, but
+//! the summary is usually written at every time step, and a reduced run gets
+//! its well rates, UDQ inputs and group quantities from here. There is no
+//! reason to hold those to the restart cadence, and a rate taken at a report
+//! step alone is the rate over the last time step before it, not over the
+//! report step.
 struct SummaryPayload {
     std::vector<std::string> keys;
-    std::vector<std::vector<double>> valuesPerStep;
-    std::vector<double> reportTimes;
+    std::vector<std::vector<double>> valuesPerStep;  //!< One per summary step.
+    std::vector<double> times;                       //!< Days, one per summary step.
+    std::vector<bool> endsReportStep;                //!< Per summary step.
+    std::vector<double> reportTimes;                 //!< Days, one per report step.
 };
 
 struct RequiredSummaryFallback {
@@ -112,7 +124,8 @@ void printUsage()
         << "Builds a sector boundary file from a parent run's output. The FLUXNUM route\n"
         << "is an alternative to running the parent with DUMPFLUX: it needs nothing but\n"
         << "the restart and summary files, at the cost of being limited to what those\n"
-        << "hold. Records land on report steps only, and the exterior relative\n"
+        << "hold. Boundary records land where the parent wrote a restart; the embedded\n"
+        << "summary keeps every step the parent's summary holds. The exterior relative\n"
         << "permeability and capillary pressure are evaluated from the saturation\n"
         << "functions rather than recovered from the parent's converged state, so a\n"
         << "deck with hysteresis will not reproduce a DUMPFLUX file exactly.\n"
@@ -144,6 +157,12 @@ void printUsage()
         << "                                       --smry-define=WBHP:P1,50.0 are valid.\n"
         << "                                       Repeatable.\n"
         << "  --no-summary                         Ignore SMSPEC/FSMSPEC summary data\n"
+        << "  --summary-min-interval=<days>        Thin the embedded summary to samples at\n"
+        << "                                       least this far apart, plus every report\n"
+        << "                                       step. Rates are averaged over whatever\n"
+        << "                                       each sample covers. Default 0 keeps\n"
+        << "                                       every step the parent wrote, which is\n"
+        << "                                       independent of the restart cadence.\n"
         << "  --help                               Show this message\n"
         << "\n"
         << "mapping directives (file or --mapping-inline):\n"
@@ -214,6 +233,22 @@ Options parseOptions(int argc, char** argv)
         }
         else if (startsWith(arg, "--smry-define=")) {
             opt.summaryDefines.push_back(valueAfterEquals(arg));
+        }
+        else if (startsWith(arg, "--summary-min-interval=")) {
+            const auto text = valueAfterEquals(arg);
+            std::size_t consumed = 0;
+            double value = -1.0;
+            try {
+                value = std::stod(text, &consumed);
+            }
+            catch (const std::exception&) {
+                consumed = 0;
+            }
+            if ((consumed != text.size()) || !(value >= 0.0)) {
+                throw std::invalid_argument("--summary-min-interval must be a non-negative "
+                                            "number of days, got '" + text + "'");
+            }
+            opt.summaryMinInterval = value;
         }
         else if (arg == "--no-summary") {
             opt.noSummary = true;
@@ -1218,29 +1253,119 @@ SummaryPayload loadSummaryPayload(const fs::path& summaryPath)
         throw std::invalid_argument("summary file contains no keys: '" + summaryPath.string() + "'");
     }
 
-    const auto timesFloat = summary.get_at_rstep("TIME");
-    const auto expectedReportSteps = timesFloat.size();
+    summary.loadData();
+
+    const auto& timesFloat = summary.get("TIME");
+    const auto reportTimesFloat = summary.get_at_rstep("TIME");
+    const auto numSteps = timesFloat.size();
 
     SummaryPayload payload;
     payload.keys = keys;
-    payload.reportTimes.assign(timesFloat.begin(), timesFloat.end());
-    payload.valuesPerStep.assign(expectedReportSteps, {});
+    payload.times.assign(timesFloat.begin(), timesFloat.end());
+    payload.reportTimes.assign(reportTimesFloat.begin(), reportTimesFloat.end());
+
+    // Which summary steps close a report step. Matched on TIME, which both
+    // series take from the same vector.
+    payload.endsReportStep.assign(numSteps, false);
+    {
+        std::size_t r = 0;
+        for (std::size_t n = 0; (n < numSteps) && (r < reportTimesFloat.size()); ++n) {
+            if (timesFloat[n] == reportTimesFloat[r]) {
+                payload.endsReportStep[n] = true;
+                ++r;
+            }
+        }
+    }
+
+    payload.valuesPerStep.assign(numSteps, {});
     for (auto& stepValues : payload.valuesPerStep) {
         stepValues.reserve(keys.size());
     }
 
     for (const auto& key : keys) {
-        const auto values = summary.get_at_rstep(key);
-        if (values.size() != expectedReportSteps) {
-            throw std::invalid_argument("summary key '" + key + "' does not have one value per report step");
+        const auto& values = summary.get(key);
+        if (values.size() != numSteps) {
+            throw std::invalid_argument("summary key '" + key + "' does not have one value per summary step");
         }
 
-        for (std::size_t stepIdx = 0; stepIdx < expectedReportSteps; ++stepIdx) {
+        for (std::size_t stepIdx = 0; stepIdx < numSteps; ++stepIdx) {
             payload.valuesPerStep[stepIdx].push_back(values[stepIdx]);
         }
     }
 
     return payload;
+}
+
+//! One embedded summary sample.
+struct SummarySampleOut {
+    double time;                //!< Seconds.
+    std::vector<double> values;
+};
+
+//! The samples to embed, from every summary step the parent wrote.
+//!
+//! Retains a step when it closes a report step, when it is the first, or when
+//! at least \p minInterval seconds have passed since the last one retained --
+//! the same rule a live DUMPFLUX run applies. A rate in a retained sample is
+//! the time average over every step since the previous retained one, so that a
+//! reduced run holding it across that interval reproduces the parent's
+//! production over it exactly. Everything else is the value at the sample.
+std::vector<SummarySampleOut> embeddedSummarySamples(const SummaryPayload& payload,
+                                                     const double minInterval)
+{
+    constexpr double secondsPerDayLocal = 86400.0;
+
+    std::vector<bool> isRate(payload.keys.size(), false);
+    for (std::size_t i = 0; i < payload.keys.size(); ++i) {
+        isRate[i] = Opm::ParentSummary::keyType(payload.keys[i]) == Opm::SummaryConfigNode::Type::Rate;
+    }
+
+    std::vector<SummarySampleOut> samples;
+    std::vector<double> rateIntegral(payload.keys.size(), 0.0);
+    double accumulated = 0.0;
+    double previousTime = 0.0;
+    double lastRetained = 0.0;
+
+    for (std::size_t n = 0; n < payload.times.size(); ++n) {
+        const auto time = payload.times[n] * secondsPerDayLocal;
+        const auto dt = time - previousTime;
+        const auto& values = payload.valuesPerStep[n];
+
+        if (dt > 0.0) {
+            for (std::size_t i = 0; i < values.size(); ++i) {
+                if (isRate[i]) {
+                    rateIntegral[i] += values[i] * dt;
+                }
+            }
+            accumulated += dt;
+        }
+        previousTime = time;
+
+        const bool retain = samples.empty()
+            || payload.endsReportStep[n]
+            || (n + 1 == payload.times.size())
+            || (time - lastRetained >= minInterval);
+        if (!retain) {
+            continue;
+        }
+
+        auto& sample = samples.emplace_back();
+        sample.time = time;
+        sample.values = values;
+        if (accumulated > 0.0) {
+            for (std::size_t i = 0; i < values.size(); ++i) {
+                if (isRate[i]) {
+                    sample.values[i] = rateIntegral[i] / accumulated;
+                }
+            }
+        }
+
+        std::fill(rateIntegral.begin(), rateIntegral.end(), 0.0);
+        accumulated = 0.0;
+        lastRetained = time;
+    }
+
+    return samples;
 }
 
 std::optional<RequiredSummaryFallback>
@@ -2359,7 +2484,7 @@ int run(const Options& opt)
                       << (reportSteps.size() - restartStepStartIndex)
                       << " restart step(s) over " << summarySteps
                       << " report step(s), so the boundary is described at that "
-                         "cadence.\n"
+                         "cadence. The summary is embedded at its own.\n"
                          "      Rerun the parent with RPTRST BASIC=2 for a record "
                          "at every report step.\n";
         }
@@ -2466,15 +2591,6 @@ int run(const Options& opt)
             if (summaryPayload) {
                 step.startTime = previousTime;
                 step.stepLength = currentTime - previousTime;
-
-                // Summary samples form their own series; emit one per parent
-                // step. Taking every available step means each stored rate is
-                // already the parent's average over that step, which is what
-                // the format requires of rate-type entries.
-                if (!summaryPayload->keys.empty()) {
-                    dumper.appendSummarySample(currentTime,
-                                               summaryPayload->valuesPerStep[summaryStepIdx]);
-                }
             }
 
             dumper.appendReportStep(step);
@@ -2483,13 +2599,32 @@ int run(const Options& opt)
         previousTime = currentTime;
     }
 
+    // The summary is its own series in the file, with its own times, so it is
+    // not held to the restart cadence the boundary is stuck with. A reduced
+    // run reads it by time and averages rates over its own steps, however the
+    // two cadences fall.
+    std::size_t numSummarySamples = 0;
+    if (summaryPayload && !summaryPayload->keys.empty()) {
+        const auto minInterval = opt.summaryMinInterval * secondsPerDay;
+        const auto samples = embeddedSummarySamples(*summaryPayload, minInterval);
+        numSummarySamples = samples.size();
+
+        for (auto& dumper : dumpers) {
+            dumper.setSummaryMinSampleInterval(minInterval);
+            for (const auto& sample : samples) {
+                dumper.appendSummarySample(sample.time, sample.values);
+            }
+        }
+    }
+
     for (std::size_t r = 0; r < dumpers.size(); ++r) {
         dumpers[r].flush(outputPaths[r].string(), /*formatted=*/false);
 
         std::cout << "Wrote " << opt.mode << "-mode FLUX file '" << outputPaths[r].string()
                   << "' for region " << selectedRegions[r]->regionId << " with "
-                  << selectedRegions[r]->boundaryFaces.size() << " boundary faces and "
-                  << (reportSteps.size() - restartStepStartIndex) << " report steps\n";
+                  << selectedRegions[r]->boundaryFaces.size() << " boundary faces, "
+                  << (reportSteps.size() - restartStepStartIndex) << " report steps and "
+                  << numSummarySamples << " summary samples\n";
     }
 
     return 0;

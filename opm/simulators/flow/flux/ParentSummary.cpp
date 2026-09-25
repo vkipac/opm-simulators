@@ -244,4 +244,50 @@ double ParentSummary::valueAt(const std::string& key, const double time) const
     return series.values[lo] + weight * (series.values[hi] - series.values[lo]);
 }
 
+double ParentSummary::valueOver(const std::string& key, const double start, const double end) const
+{
+    const auto it = this->series_.find(key);
+    if ((it == this->series_.end())
+        || (it->second.type != SummaryConfigNode::Type::Rate)
+        || !(end > start))
+    {
+        return this->valueAt(key, end);
+    }
+
+    const auto& values = it->second.values;
+    const auto& times = this->times_;
+    if (values.empty() || times.empty()) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+
+    // Sample k holds for (times[k-1], times[k]]; the first one reaches back
+    // indefinitely and the last one forward, as in valueAt().
+    double integral = 0.0;
+    double covered = 0.0;
+    const auto add = [&](const double value, const double from, const double to)
+    {
+        const auto length = std::min(to, end) - std::max(from, start);
+        if ((length > 0.0) && std::isfinite(value)) {
+            integral += value * length;
+            covered += length;
+        }
+    };
+
+    const auto lowest = std::numeric_limits<double>::lowest();
+    const auto highest = std::numeric_limits<double>::max();
+
+    for (std::size_t k = 0; k < values.size() && k < times.size(); ++k) {
+        const auto from = (k == 0) ? lowest : times[k - 1];
+        if (from >= end) {
+            break;
+        }
+        add(values[k], from, times[k]);
+    }
+    add(values.back(), times.back(), highest);
+
+    return (covered > 0.0)
+        ? integral / covered
+        : std::numeric_limits<double>::quiet_NaN();
+}
+
 } // namespace Opm

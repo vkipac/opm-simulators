@@ -291,9 +291,12 @@ public:
         // need the wells outside the region to be counted already. Until the
         // first time step is chosen this is the latest interval the parent has
         // an average for, which is the best there is.
-        this->updateFluxFixedWellRates_(this->simulator().episodeIndex(),
-                                        static_cast<double>(this->simulator().episodeStartTime())
-                                        - static_cast<double>(this->simulator().startTime()));
+        {
+            const auto episodeStart = static_cast<double>(this->simulator().episodeStartTime())
+                - static_cast<double>(this->simulator().startTime());
+            this->updateFluxFixedWellRates_(this->simulator().episodeIndex(),
+                                            episodeStart, episodeStart);
+        }
 
         FlowProblemType::beginEpisode();
 
@@ -317,7 +320,7 @@ public:
                                 - static_cast<double>(simulator.startTime());
 
         if (episodeIdx >= 0) {
-            this->seedParentSummaryState_(episodeStart);
+            this->seedParentSummaryState_(episodeStart, episodeStart);
         }
 
         // Evaluate UDQ assign statements to make sure the settings are
@@ -362,7 +365,7 @@ public:
     //!          the same production twice. Cumulatives are instead built up by
     //!          the normal accumulation path from the rates, including the
     //!          rates injected for wells outside the region.
-    void seedParentSummaryState_(const double time)
+    void seedParentSummaryState_(const double start, const double time)
     {
         const auto* parent = this->fluxParentSummary_();
         if (parent == nullptr) {
@@ -376,7 +379,7 @@ public:
                 continue;
             }
 
-            const auto value = parent->valueAt(key, time);
+            const auto value = parent->valueOver(key, start, time);
             if (!std::isfinite(value)) {
                 continue;
             }
@@ -520,7 +523,7 @@ public:
     //!          an injector's goes to the phase it injects.
     //!
     //!          Collective, because deciding which wells are absent is.
-    void updateFluxFixedWellRates_(const int episodeIdx, const double time)
+    void updateFluxFixedWellRates_(const int episodeIdx, const double start, const double time)
     {
         const auto* parent = this->fluxParentSummary_();
         if ((parent == nullptr) || (episodeIdx < 0)) {
@@ -536,10 +539,10 @@ public:
 
         // The parent's summary is in the deck's output units; the well model
         // works in SI.
-        const auto rate = [parent, time, &units](const std::string& key,
-                                                 const UnitSystem::measure measure)
+        const auto rate = [parent, start, time, &units](const std::string& key,
+                                                        const UnitSystem::measure measure)
         {
-            const auto value = parent->valueAt(key, time);
+            const auto value = parent->valueOver(key, start, time);
             return std::isfinite(value) ? units.to_si(measure, value) : 0.0;
         };
 
@@ -698,11 +701,17 @@ public:
         // the record's sums for the cells outside the sector.
         this->refreshFluxBoundaryRecord_(static_cast<double>(this->simulator().time()));
 
+        // The parent's rates are averages over its own steps, which need not
+        // be this run's, so everything taken from its summary for this step is
+        // taken over the step: a rate as its average across (start, end], all
+        // else at the end.
+        const auto stepStart = static_cast<double>(this->simulator().time());
+        const auto time = this->fluxParentSummaryTime_();
+
         // Ahead of the base class, which starts the well model's time step and
         // with it the group controls. Refreshed per time step, not per report
-        // step, because the parent's rates are averages over its own steps.
-        this->updateFluxFixedWellRates_(this->simulator().episodeIndex(),
-                                        this->fluxParentSummaryTime_());
+        // step.
+        this->updateFluxFixedWellRates_(this->simulator().episodeIndex(), stepStart, time);
 
         FlowProblemType::beginTimeStep();
 
@@ -710,8 +719,7 @@ public:
         // UDA group targets may be driven by UDQs that evolve on every time
         // step, so this has to follow the time step cadence rather than being
         // applied once per report step.
-        const auto time = this->fluxParentSummaryTime_();
-        this->seedParentSummaryState_(time);
+        this->seedParentSummaryState_(stepStart, time);
         this->restoreFluxGroupTargetUDQs_(this->simulator().episodeIndex());
 
         hybridNewton_.tryApplyHybridNewton();
