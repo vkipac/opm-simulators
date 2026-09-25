@@ -690,6 +690,14 @@ public:
      */
     void beginTimeStep() override
     {
+        // The boundary record for this step is the one covering it, which is
+        // found from the step's start: a record ending exactly there describes
+        // the step before. And it is chosen ahead of the base class, which
+        // caches the boundary state and mass rates from whatever record is
+        // current and starts the well model's step, whose rate converter reads
+        // the record's sums for the cells outside the sector.
+        this->refreshFluxBoundaryRecord_(static_cast<double>(this->simulator().time()));
+
         // Ahead of the base class, which starts the well model's time step and
         // with it the group controls. Refreshed per time step, not per report
         // step, because the parent's rates are averages over its own steps.
@@ -703,7 +711,6 @@ public:
         // step, so this has to follow the time step cadence rather than being
         // applied once per report step.
         const auto time = this->fluxParentSummaryTime_();
-        this->refreshFluxBoundaryRecord_(time);
         this->seedParentSummaryState_(time);
         this->restoreFluxGroupTargetUDQs_(this->simulator().episodeIndex());
 
