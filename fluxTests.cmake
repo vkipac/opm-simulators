@@ -172,16 +172,6 @@ opm_add_test(flux_partial_regions_smoke
     -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-partial-regions.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_PARTIAL_REGIONS_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_PARTIAL_REGIONS_SMOKE.DATA 2"
 )
 
-set(_flux_threshold_pressure_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_threshold_pressure_smoke)
-opm_add_test(flux_threshold_pressure_smoke
-  EXE_TARGET flow_blackoil
-  DRIVER_ARGS
-    -i ${PROJECT_SOURCE_DIR}/tests/flux
-    -r ${_flux_threshold_pressure_result_path}
-    -f FLUX_DUMP_THPRES_SMOKE
-    -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-threshold-pressure.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_THPRES_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_THPRES_SMOKE.DATA"
-)
-
 set(_make_flux_sparse_restart_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+make_flux_sparse_restart_smoke)
 opm_add_test(make_flux_sparse_restart_smoke
   EXE_TARGET flow_blackoil
@@ -226,6 +216,16 @@ set(_make_flux_fluxnum_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow
       PATH_SUFFIXES bin)
 
     if(OPM_SUMMARY_BIN)
+      set(_flux_threshold_pressure_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_threshold_pressure_smoke)
+      opm_add_test(flux_threshold_pressure_smoke
+        EXE_TARGET flow_blackoil
+        DRIVER_ARGS
+          -i ${PROJECT_SOURCE_DIR}/tests/flux
+          -r ${_flux_threshold_pressure_result_path}
+          -f FLUX_DUMP_THPRES_SMOKE
+          -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-threshold-pressure.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_DUMP_THPRES_SMOKE.DATA ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_THPRES_SMOKE.DATA ${PROJECT_BINARY_DIR}/bin/make_flux ${OPM_SUMMARY_BIN} ${PROJECT_SOURCE_DIR}/tests/flux/FLUX_USE_THPRES_CUTOUT_SMOKE.DATA"
+      )
+
       set(_flux_fault_boundary_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_fault_boundary_smoke)
 
       opm_add_test(flux_fault_boundary_smoke

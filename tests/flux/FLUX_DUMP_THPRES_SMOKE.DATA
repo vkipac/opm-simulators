@@ -179,7 +179,21 @@ THPRES
   1 2 1* /
 /
 
+SUMMARY
+
+-- Sector cells on either side of the region boundary, and one against the
+-- sector's edge, where the boundary is imposed.
+BPR
+  4 1 1 /
+  6 1 2 /
+  7 1 3 /
+/
+
 SCHEDULE
+
+-- Restarts, so make_flux can build the same file from this run's output.
+RPTRST
+  'BASIC=2' /
 
 TSTEP
   1 /

@@ -1,11 +1,13 @@
--- Threshold-pressure smoke test: USEFLUX consumer.
+-- Threshold-pressure smoke test: USEFLUX consumer on a cut-out grid.
 --
--- The same grid as the producer, cut down to the sector: i = 4..7 of the top
--- three layers. The region boundary at i=5/6 still runs through it, but only
--- three of its ten faces are here, so working the defaulted THPRES entry out
--- from this grid gives about 3 bar where the parent had about 10.
+-- The same sector as FLUX_USE_THPRES_SMOKE, i = 4..7 of the top three layers,
+-- but as a grid of its own rather than the parent grid with everything else
+-- made inactive. This is how a sector is usually run, and the boundary file
+-- still names its cells by where they sit in the parent, so a consumer that
+-- looks them up in its own, smaller, grid finds the wrong cells or none.
 --
--- The check is that this run reports the parent's table rather than its own.
+-- The check is that this run imposes the same boundary, and so reaches the
+-- same state, as the full-grid consumer.
 
 RUNSPEC
 
@@ -18,7 +20,7 @@ METRIC
 UNIFOUT
 
 DIMENS
-  10 1 10 /
+  4 1 3 /
 
 TABDIMS
   1 1 40 20 1 20 /
@@ -32,29 +34,23 @@ EQLOPTS
 GRID
 
 DX
-  100*1 /
+  12*1 /
 DY
-  100*1 /
+  12*1 /
 DZ
-  100*1 /
+  12*1 /
 
 TOPS
-  10*0. /
+  4*0. /
 
 PORO
-  100*0.3 /
+  12*0.3 /
 
 PERMX
-  100*500 /
-
-ACTNUM
-  3*0 4*1 3*0
-  3*0 4*1 3*0
-  3*0 4*1 3*0
-  70*0 /
+  12*500 /
 
 FLUXNUM
-  100*1 /
+  12*1 /
 
 FLUXREG
   1 /
@@ -139,36 +135,22 @@ PVTO
 REGIONS
 
 EQLNUM
-  5*1 5*2
-  5*1 5*2
-  5*1 5*2
-  5*1 5*2
-  5*1 5*2
-  5*1 5*2
-  5*1 5*2
-  5*1 5*2
-  5*1 5*2
-  5*1 5*2 /
+  2*1 2*2
+  2*1 2*2
+  2*1 2*2 /
 
 SOLUTION
 
 SWAT
-  100*0.0 /
+  12*0.0 /
 
 SGAS
-  100*0.0 /
+  12*0.0 /
 
 PRESSURE
-  5*300.0 5*301.0
-  5*300.0 5*302.0
-  5*300.0 5*303.0
-  5*300.0 5*304.0
-  5*300.0 5*305.0
-  5*300.0 5*306.0
-  5*300.0 5*307.0
-  5*300.0 5*308.0
-  5*300.0 5*309.0
-  5*300.0 5*310.0 /
+  2*300.0 2*301.0
+  2*300.0 2*302.0
+  2*300.0 2*303.0 /
 
 THPRES
   1 2 1* /
@@ -176,12 +158,11 @@ THPRES
 
 SUMMARY
 
--- Sector cells on either side of the region boundary, and one against the
--- sector's edge, where the boundary is imposed.
+-- The cells FLUX_USE_THPRES_SMOKE reports, at their place in this grid.
 BPR
-  4 1 1 /
-  6 1 2 /
-  7 1 3 /
+  1 1 1 /
+  3 1 2 /
+  4 1 3 /
 /
 
 SCHEDULE

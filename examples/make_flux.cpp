@@ -2317,21 +2317,30 @@ int run(const Options& opt)
     // initial potential difference found anywhere along that region boundary,
     // so it can only be arrived at by equilibrating the whole field. Nothing
     // offline can recompute it. The parent does write it into its restart
-    // file, for its own restart runs, and that copy is in SI units and laid out
-    // as the same square matrix, so it can be lifted across unchanged.
+    // file, for its own restart runs, laid out as the same square matrix but
+    // in the deck's output units, like everything else in the file. It is a
+    // restart-only vector, so a graphics-only restart (NORST=1) leaves it out,
+    // and the initial one may too; any step that has it will do, since the
+    // table does not change.
     const auto eqlnum = state.fieldProps().has_int("EQLNUM")
         ? state.fieldProps().get_global_int("EQLNUM")
         : std::vector<int>{};
 
     std::vector<double> thresholdPressure;
-    if (restart.hasArray("THRESHPR", reportSteps.front())) {
-        thresholdPressure = restart.getRestartData<double>("THRESHPR", reportSteps.front());
+    for (const auto step : reportSteps) {
+        if (restart.hasArray("THRESHPR", step)) {
+            thresholdPressure = restart.getRestartData<double>("THRESHPR", step);
+            unitSystem.to_si(Opm::UnitSystem::measure::pressure, thresholdPressure);
+            break;
+        }
     }
-    else if (state.getSimulationConfig().getThresholdPressure().size() > 0) {
+
+    if (thresholdPressure.empty() && (state.getSimulationConfig().getThresholdPressure().size() > 0)) {
         std::cerr << "make_flux: the parent has THPRES active but wrote no THRESHPR to "
                      "its restart file, so the thresholds cannot be passed on; a reduced "
                      "run will work out its own, which for defaulted entries will be too "
-                     "small\n";
+                     "small. THRESHPR is left out of graphics-only restarts: rerun the "
+                     "parent without NORST=1 in RPTRST.\n";
     }
 
     for (const auto* regionPtr : selectedRegions) {
@@ -2366,7 +2375,6 @@ int run(const Options& opt)
                 : 0;
             exteriorPvtRegions.push_back(value);
         }
-        dumper.setBoundaryExteriorPvtRegions(exteriorPvtRegions);
 
         // How deep the centre of that cell is. The pressures written per report
         // step are taken there, while a reduced run imposes them at the face,
@@ -2381,7 +2389,6 @@ int run(const Options& opt)
                                      ? cellDepth(face.exteriorGlobalCell)
                                      : std::numeric_limits<double>::quiet_NaN());
         }
-        dumper.setBoundaryExteriorDepths(exteriorDepths);
 
         // Which equilibration region that cell is in. The sector's own EQLNUM
         // stops at its edge, so without this it cannot tell which threshold
@@ -2395,6 +2402,20 @@ int run(const Options& opt)
                 : -1;
             exteriorEquilRegions.push_back(value);
         }
+
+        // A face nothing flows through says nothing about the cell beyond it,
+        // and DUMPFLUX records it as unknown rather than depend on whether that
+        // cell happened to be at hand. Do the same, so the two routes agree.
+        for (std::size_t i = 0; i < boundaryTransmissibilities.size(); ++i) {
+            if (!(boundaryTransmissibilities[i] > 0.0)) {
+                exteriorPvtRegions[i] = 0;
+                exteriorDepths[i] = std::numeric_limits<double>::quiet_NaN();
+                exteriorEquilRegions[i] = -1;
+            }
+        }
+
+        dumper.setBoundaryExteriorPvtRegions(exteriorPvtRegions);
+        dumper.setBoundaryExteriorDepths(exteriorDepths);
         dumper.setBoundaryExteriorEquilRegions(exteriorEquilRegions);
 
         dumper.setThresholdPressure(thresholdPressure);

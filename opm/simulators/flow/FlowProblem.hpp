@@ -2132,17 +2132,69 @@ protected:
             }
         }
 
+        const auto& vanguard = this->simulator().vanguard();
+
+        // The file names the region's cells by their Cartesian index in the
+        // PARENT grid. A reduced run on the parent deck shares that grid, but
+        // one on a model cut out to the region's box has a grid of its own,
+        // numbered from the box corner, and a parent index read as one of its
+        // own lands on some unrelated cell or none at all -- which on one field
+        // left 553 of 583 boundary faces without a grid face and the sector
+        // all but sealed.
+        const auto& header = fluxData.header;
+        const auto& dims = vanguard.cartesianDimensions();
+        const bool sameGrid = (dims[0] == header.parentNx)
+            && (dims[1] == header.parentNy)
+            && (dims[2] == header.parentNz);
+        const bool boxGrid = (dims[0] == header.boxNx)
+            && (dims[1] == header.boxNy)
+            && (dims[2] == header.boxNz);
+
+        if (!sameGrid && !boxGrid) {
+            throw std::runtime_error(fmt::format(
+                "USEFLUX: '{}' describes a region of a {}x{}x{} grid, boxed in {}x{}x{} "
+                "cells from ({},{},{}), and this run's grid is {}x{}x{}, which is "
+                "neither",
+                selectedFluxPath.string(),
+                header.parentNx, header.parentNy, header.parentNz,
+                header.boxNx, header.boxNy, header.boxNz,
+                header.boxI1, header.boxJ1, header.boxK1,
+                dims[0], dims[1], dims[2]));
+        }
+
+        const auto toThisGrid = [&header, sameGrid](const int parentCell)
+        {
+            if (sameGrid) {
+                return parentCell;
+            }
+
+            const int i = parentCell % header.parentNx - (header.boxI1 - 1);
+            const int j = (parentCell / header.parentNx) % header.parentNy - (header.boxJ1 - 1);
+            const int k = parentCell / (header.parentNx * header.parentNy) - (header.boxK1 - 1);
+
+            if ((i < 0) || (i >= header.boxNx)
+                || (j < 0) || (j >= header.boxNy)
+                || (k < 0) || (k >= header.boxNz))
+            {
+                return -1;
+            }
+
+            return i + header.boxNx * (j + header.boxNy * k);
+        };
+
         // Where each of the region's cells sits in THIS rank's grid. The file
         // numbers them in region order, which a serial run happens to activate
         // them in, but a parallel rank holds an arbitrary subset under its own
         // numbering and has to look each one up. Cells that belong to another
         // rank come back as -1 and their faces are left to whoever holds them.
-        const auto& vanguard = this->simulator().vanguard();
         std::vector<int> localToActive(fluxData.localToGlobal.size(), -1);
         for (std::size_t local = 0; local < fluxData.localToGlobal.size(); ++local) {
             const auto globalCell = fluxData.localToGlobal[local];
             if (globalCell >= 0) {
-                localToActive[local] = vanguard.compressedIndex(globalCell);
+                const auto cell = toThisGrid(globalCell);
+                if (cell >= 0) {
+                    localToActive[local] = vanguard.compressedIndex(cell);
+                }
             }
         }
 
