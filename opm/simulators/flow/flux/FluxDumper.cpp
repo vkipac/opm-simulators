@@ -152,6 +152,11 @@ void FluxDumper::setThresholdPressure(std::vector<double> thresholdPressure)
     this->data_.thresholdPressure = std::move(thresholdPressure);
 }
 
+void FluxDumper::setParentWells(EclIO::FluxFile::ParentWells parentWells)
+{
+    this->data_.parentWells = std::move(parentWells);
+}
+
 std::vector<double> FluxDumper::aggregateRates(
     const Sampling sampling,
     const std::vector<std::vector<double>>& rateSnapshots,

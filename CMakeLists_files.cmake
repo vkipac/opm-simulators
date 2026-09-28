@@ -128,6 +128,7 @@ list (APPEND MAIN_SOURCE_FILES
   opm/simulators/flow/GenericTracerModel.cpp
   opm/simulators/flow/flux/FluxActivation.cpp
   opm/simulators/flow/flux/FluxBoundary.cpp
+  opm/simulators/flow/flux/FluxParentWells.cpp
   opm/simulators/flow/flux/FluxDumper.cpp
   opm/simulators/flow/flux/FluxRegions.cpp
   opm/simulators/flow/flux/FluxSummaryKeys.cpp
@@ -1078,6 +1079,7 @@ list (APPEND PUBLIC_HEADER_FILES
   opm/simulators/flow/flux/FluxRegions.hpp
   opm/simulators/flow/flux/FluxActivation.hpp
   opm/simulators/flow/flux/FluxBoundary.hpp
+  opm/simulators/flow/flux/FluxParentWells.hpp
   opm/simulators/flow/flux/ParentSummary.hpp
   opm/simulators/flow/partitionCells.hpp
   opm/simulators/flow/PolyhedralGridVanguard.hpp

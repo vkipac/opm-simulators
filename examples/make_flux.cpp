@@ -41,6 +41,7 @@
 #include <opm/material/fluidmatrixinteractions/EclMaterialLawManager.hpp>
 #include <opm/material/fluidmatrixinteractions/MaterialTraits.hpp>
 #include <opm/simulators/flow/flux/FluxDumper.hpp>
+#include <opm/simulators/flow/flux/FluxParentWells.hpp>
 #include <opm/simulators/flow/flux/FluxRegions.hpp>
 #include <opm/simulators/flow/flux/FluxSummaryKeys.hpp>
 #include <opm/simulators/flow/flux/ParentSummary.hpp>
@@ -131,6 +132,13 @@ void printUsage()
         << "permeability and capillary pressure are evaluated from the saturation\n"
         << "functions rather than recovered from the parent's converged state, so a\n"
         << "deck with hysteresis will not reproduce a DUMPFLUX file exactly.\n"
+        << "\n"
+        << "The file also lists the parent's wells and groups over time. A sector\n"
+        << "deck that keeps only its own wells gets the others added, without\n"
+        << "connections, so that its group and field totals, group controls and\n"
+        << "UDQs count them as the parent did. Their rates, and whatever the UDQs\n"
+        << "read of them, come from the embedded summary: run the parent with\n"
+        << "FLUXALL in its SUMMARY section.\n"
         << "\n"
         << "region selection (mutually exclusive):\n"
         << "  --fluxnum=<file.grdecl>              File holding a FLUXNUM array over the\n"
@@ -2523,6 +2531,11 @@ int run(const Options& opt)
                      "parent without NORST=1 in RPTRST.\n";
     }
 
+    // Which group each well is in, and whether it produces or injects, so that
+    // a sector whose schedule lists only its own wells can still count the
+    // others in, their rates coming from the embedded summary.
+    const auto parentWells = Opm::describeFluxParentWells(schedule);
+
     for (const auto* regionPtr : selectedRegions) {
         const auto& region = *regionPtr;
 
@@ -2599,6 +2612,7 @@ int run(const Options& opt)
         dumper.setBoundaryExteriorEquilRegions(exteriorEquilRegions);
 
         dumper.setThresholdPressure(thresholdPressure);
+        dumper.setParentWells(parentWells);
 
         outputPaths.push_back(outputPathForRegion(opt.output, region.regionId, multipleRegions));
     }

@@ -133,6 +133,7 @@ public:
     //!   that boundary cannot arrive at the same number and has to be handed
     //!   this one.
     void setThresholdPressure(std::vector<double> thresholdPressure);
+    void setParentWells(EclIO::FluxFile::ParentWells parentWells);
 
     const EclIO::FluxFile::Data& data() const;
     const std::vector<FluxRegions::BoundaryFace>& regionBoundaryFaces() const;

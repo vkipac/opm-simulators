@@ -57,6 +57,7 @@
 #include <opm/simulators/flow/FlowBaseVanguard.hpp>
 #include <opm/simulators/flow/FlowProblemParameters.hpp>
 #include <opm/simulators/flow/flux/FluxDumper.hpp>
+#include <opm/simulators/flow/flux/FluxParentWells.hpp>
 #include <opm/simulators/flow/flux/FluxSummaryKeys.hpp>
 #include <opm/simulators/flow/flux/FluxRegions.hpp>
 #include <opm/simulators/timestepping/SimulatorTimer.hpp>
@@ -1829,6 +1830,7 @@ private:
         const auto multipleRegions = regions.size() > 1;
 
         int sequence = 1;
+        const auto parentWells = describeFluxParentWells(this->simulator_.vanguard().schedule());
         for (const auto& region : regions) {
             this->fluxDumpers_.emplace_back(io.getBaseName(),
                                             region.regionId,
@@ -1837,6 +1839,7 @@ private:
                                             fluxMode,
                                             EclIO::FluxFile::Sampling::Averaged,
                                             phaseMask);
+            this->fluxDumpers_.back().setParentWells(parentWells);
 
             if (multipleRegions) {
                 std::ostringstream os;
@@ -2792,6 +2795,40 @@ private:
                 assign(data::Rates::opt::gas, UnitSystem::measure::gas_surface_rate,
                        "WGPR", "WGIR");
             }
+
+            // The parent reports one reservoir volume per well, so it is booked
+            // where the well model books it for a well outside the sector: a
+            // producer's against oil, or the first active phase without oil,
+            // and an injector's against the phase it injects.
+            const auto reservoirOpt = [&well]()
+            {
+                if (well.isProducer()) {
+                    return FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)
+                        ? data::Rates::opt::reservoir_oil
+                        : (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)
+                           ? data::Rates::opt::reservoir_water
+                           : data::Rates::opt::reservoir_gas);
+                }
+                switch (well.injectorType()) {
+                case InjectorType::GAS: return data::Rates::opt::reservoir_gas;
+                case InjectorType::OIL: return data::Rates::opt::reservoir_oil;
+                default:                return data::Rates::opt::reservoir_water;
+                }
+            }();
+            assign(reservoirOpt, UnitSystem::measure::rate, "WVPR", "WVIR");
+
+            // Pressures are not rates and are taken at the end of the interval.
+            // A UDQ may read them, and without this Summary::eval() reports
+            // zero for a well it has no solution for, over the parent's value.
+            const auto pressure = [&](const std::string& keyword, double& target_value)
+            {
+                const auto value = parent->valueAt(keyword + ':' + wellName, static_cast<double>(time));
+                if (std::isfinite(value)) {
+                    target_value = units.to_si(UnitSystem::measure::pressure, value);
+                }
+            };
+            pressure("WBHP", target.bhp);
+            pressure("WTHP", target.thp);
         }
     }
 
