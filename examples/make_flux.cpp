@@ -38,6 +38,8 @@
 #include <opm/io/eclipse/ERst.hpp>
 #include <opm/io/eclipse/ESmry.hpp>
 #include <opm/io/eclipse/SummaryNode.hpp>
+#include <opm/material/fluidmatrixinteractions/EclMaterialLawManager.hpp>
+#include <opm/material/fluidmatrixinteractions/MaterialTraits.hpp>
 #include <opm/simulators/flow/flux/FluxDumper.hpp>
 #include <opm/simulators/flow/flux/FluxRegions.hpp>
 #include <opm/simulators/flow/flux/FluxSummaryKeys.hpp>
@@ -617,6 +619,115 @@ private:
         const auto cell = static_cast<std::size_t>(globalCell);
         return (cell < this->globalToActive_.size()) ? this->globalToActive_[cell] : -1;
     }
+};
+
+//! \brief The parent's saturation functions, evaluated cell by cell.
+//!
+//! \details A reduced run that is not told the exterior cell's relative
+//!   permeability and capillary pressure evaluates its OWN boundary cell's
+//!   curves at the exterior saturations. Across a sector boundary those are
+//!   often not the same curves: another SATNUM region, other scaled end
+//!   points, another SWATINIT scaling of the oil-water capillary pressure. The
+//!   inflow's mobility and the exterior phase pressures then come out wrong
+//!   wherever the rock changes at the boundary.
+//!
+//!   A restart file does not hold the converged phase pressures DUMPFLUX reads
+//!   these off, but it holds everything needed to evaluate the curves, so they
+//!   are evaluated here with the simulator's own material law. Hysteresis
+//!   state is the one thing missing, and the drainage curves stand in for it.
+class ExteriorSaturationFunctions
+{
+public:
+    using Traits = Opm::ThreePhaseMaterialTraits<double,
+                                                 /*wettingPhaseIdx=*/0,
+                                                 /*nonWettingPhaseIdx=*/1,
+                                                 /*gasPhaseIdx=*/2,
+                                                 /*enableHysteresis=*/true,
+                                                 /*enableEndpointScaling=*/true>;
+    using Manager = Opm::EclMaterialLaw::Manager<Traits>;
+    using MaterialLaw = typename Manager::MaterialLaw;
+
+    static constexpr int waterIdx = Traits::wettingPhaseIdx;
+    static constexpr int oilIdx = Traits::nonWettingPhaseIdx;
+    static constexpr int gasIdx = Traits::gasPhaseIdx;
+
+    explicit ExteriorSaturationFunctions(const Opm::EclipseState& state)
+        : grid_(state.getInputGrid())
+    {
+        this->manager_.initFromState(state);
+        this->manager_.initParamsForElements(
+            state, this->grid_.getNumActive(),
+            [](const Opm::FieldPropsManager& fp, const std::string& keyword, const bool translate)
+            {
+                auto values = fp.get_int(keyword);
+                if (translate) {
+                    for (auto& v : values) {
+                        --v;
+                    }
+                }
+                return values;
+            },
+            [](const unsigned elemIdx) { return elemIdx; });
+    }
+
+    //! \brief Scale the oil-water capillary pressure as SWATINIT did.
+    //!
+    //! \details The scaling is fixed when the parent equilibrates and cannot be
+    //!   recomputed from its output, so it is taken from the PPCW array, which
+    //!   is what the simulator itself does on restart. \p ppcw is in SI.
+    void applySwatinit(const CellLookup& cells, const std::vector<double>& ppcw)
+    {
+        for (std::size_t cell = 0; cell < this->grid_.getCartesianSize(); ++cell) {
+            if (!this->grid_.cellActive(cell)) {
+                continue;
+            }
+            if (const auto value = cells(ppcw, static_cast<int>(cell))) {
+                this->manager_.applyRestartSwatInit(
+                    static_cast<unsigned>(this->grid_.activeIndex(cell)), *value);
+            }
+        }
+    }
+
+    //! \brief Relative permeabilities and capillary pressures of one cell at
+    //!        the given saturations, indexed Water/Oil/Gas as the traits say.
+    //!
+    //! \return False for a cell the parent did not solve for.
+    bool evaluate(const int globalCell,
+                  const double sw,
+                  const double sg,
+                  std::array<double, 3>& kr,
+                  std::array<double, 3>& pc) const
+    {
+        kr.fill(0.0);
+        pc.fill(0.0);
+
+        const auto cell = static_cast<std::size_t>(globalCell);
+        if ((globalCell < 0) || (cell >= this->grid_.getCartesianSize())
+            || !this->grid_.cellActive(cell))
+        {
+            return false;
+        }
+
+        struct Saturations
+        {
+            std::array<double, 3> s{};
+            double saturation(const unsigned phaseIdx) const { return this->s[phaseIdx]; }
+        } fs;
+
+        fs.s[waterIdx] = std::clamp(sw, 0.0, 1.0);
+        fs.s[gasIdx] = std::clamp(sg, 0.0, 1.0);
+        fs.s[oilIdx] = std::clamp(1.0 - fs.s[waterIdx] - fs.s[gasIdx], 0.0, 1.0);
+
+        const auto& params = this->manager_.materialLawParams(
+            static_cast<unsigned>(this->grid_.activeIndex(cell)));
+        MaterialLaw::relativePermeabilities(kr, params, fs);
+        MaterialLaw::capillaryPressures(pc, params, fs);
+        return true;
+    }
+
+private:
+    const Opm::EclipseGrid& grid_;
+    Manager manager_;
 };
 
 int phaseMask(const Opm::Deck& deck)
@@ -1862,6 +1973,46 @@ void fillPressureStepData(Opm::FluxDumper::ReportStepData& step,
     }
 }
 
+// The exterior cell's relative permeabilities and capillary pressures, in the
+// layout DUMPFLUX writes: face-major, active phases in Oil/Water/Gas order,
+// capillary pressure relative to the reference phase (oil, or gas without oil).
+// Needs the step's saturations, so call it after fillPressureStepData().
+void fillExteriorRockState(Opm::FluxDumper::ReportStepData& step,
+                           const Opm::FluxRegions::Region& region,
+                           const ExteriorSaturationFunctions& satfuncs,
+                           const bool oilActive,
+                           const bool waterActive,
+                           const bool gasActive)
+{
+    using SF = ExteriorSaturationFunctions;
+
+    std::vector<int> phases;
+    if (oilActive) { phases.push_back(SF::oilIdx); }
+    if (waterActive) { phases.push_back(SF::waterIdx); }
+    if (gasActive) { phases.push_back(SF::gasIdx); }
+
+    const auto refIdx = oilActive ? SF::oilIdx : (gasActive ? SF::gasIdx : SF::waterIdx);
+    const auto numFaces = region.boundaryFaces.size();
+
+    step.relPerm.assign(numFaces * phases.size(), 0.0);
+    step.capPressure.assign(numFaces * phases.size(), 0.0);
+
+    std::array<double, 3> kr{};
+    std::array<double, 3> pc{};
+    for (std::size_t f = 0; f < numFaces; ++f) {
+        const auto sw = waterActive ? step.swat[f] : 0.0;
+        const auto sg = gasActive ? step.sgas[f] : 0.0;
+        if (!satfuncs.evaluate(region.boundaryFaces[f].exteriorGlobalCell, sw, sg, kr, pc)) {
+            continue;
+        }
+
+        for (std::size_t p = 0; p < phases.size(); ++p) {
+            step.relPerm[f * phases.size() + p] = kr[phases[p]];
+            step.capPressure[f * phases.size() + p] = pc[phases[p]] - pc[refIdx];
+        }
+    }
+}
+
 // Reference density of one component, in kg/sm3, for the PVT region a cell
 // belongs to.
 //
@@ -2194,6 +2345,14 @@ int run(const Options& opt)
     const auto& unitSystem = state.getDeckUnitSystem();
     const ReferenceDensities referenceDensity(state);
 
+    if (hasPressureMode(fluxMode) && state.runspec().hysterPar().active()) {
+        Opm::OpmLog::warning("The parent deck enables hysteresis. The exterior relative "
+                             "permeability and capillary pressure written here come from the "
+                             "saturation functions alone, because a restart file does not "
+                             "carry the parent's converged phase pressures, so they follow "
+                             "the drainage curves and will not match a DUMPFLUX file.");
+    }
+
     std::vector<int> regionValues;
     std::vector<int> requestedRegions;
 
@@ -2205,14 +2364,6 @@ int run(const Options& opt)
 
         regionValues = readFluxnumFile(opt.fluxnum, dims);
         requestedRegions = parseRegionList(opt.regions);
-
-        if (state.runspec().hysterPar().active()) {
-            Opm::OpmLog::warning("The parent deck enables hysteresis. The exterior relative "
-                                 "permeability and capillary pressure written here come from the "
-                                 "saturation functions alone, because a restart file does not "
-                                 "carry the parent's converged phase pressures, so they follow "
-                                 "the drainage curves and will not match a DUMPFLUX file.");
-        }
     }
     else {
         regionValues = parseMappingSpecification(opt, dims);
@@ -2282,6 +2433,35 @@ int run(const Options& opt)
     const bool includeRs = true;
     const bool includeRv = true;
     const bool hasTemperature = restart.hasArray("TEMP", reportSteps.front());
+
+    std::optional<ExteriorSaturationFunctions> satfuncs;
+    if (hasPressureMode(fluxMode)) {
+        satfuncs.emplace(state);
+
+        if (state.fieldProps().has_double("SWATINIT")) {
+            // PPCW is a restart-only vector like THRESHPR, so any step that has
+            // it will do.
+            std::vector<double> ppcw;
+            for (const auto step : reportSteps) {
+                if (restart.hasArray("PPCW", step)) {
+                    ppcw = optionalRestartArray(restart, "PPCW", step);
+                    break;
+                }
+            }
+
+            if (ppcw.empty()) {
+                std::cerr << "make_flux: the parent uses SWATINIT but wrote no PPCW to its "
+                             "restart file, so the exterior oil-water capillary pressure is "
+                             "left unscaled. PPCW is left out of graphics-only restarts: "
+                             "rerun the parent without NORST=1 in RPTRST.\n";
+            }
+            else {
+                cells.require(ppcw, "PPCW");
+                unitSystem.to_si(Opm::UnitSystem::measure::pressure, ppcw);
+                satfuncs->applySwatinit(cells, ppcw);
+            }
+        }
+    }
 
     const auto pvtnum = state.fieldProps().get_global_int("PVTNUM");
 
@@ -2593,6 +2773,10 @@ int run(const Options& opt)
                                      includeRs,
                                      includeRv,
                                      hasTemperature);
+
+                fillExteriorRockState(step, region, *satfuncs,
+                                      (phaseMaskValue & static_cast<int>(Opm::EclIO::FluxFile::Phase::Oil)) != 0,
+                                      waterActive, gasActive);
 
                 if (!poreVolume.empty()) {
                     const auto sums = computeExternalRegionSums(region,

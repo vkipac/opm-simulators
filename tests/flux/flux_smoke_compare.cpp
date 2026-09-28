@@ -93,13 +93,18 @@ bool compareStep(const Opm::EclIO::FluxFile::ReportStep& lhs,
         return false;
     }
 
+    // Saturations get single precision's worth of room: a restart file holds
+    // them as floats, so a file make_flux built from one agrees with DUMPFLUX's
+    // doubles only to about 1e-7.
     const bool basicMatch = compareVector(lhs.massRates, rhs.massRates, "massRates", 1e-10)
         && pressureMatch
-        && compareVector(lhs.swat, rhs.swat, "swat", 1e-10)
-        && compareVector(lhs.sgas, rhs.sgas, "sgas", 1e-10)
+        && compareVector(lhs.swat, rhs.swat, "swat", 1e-6)
+        && compareVector(lhs.sgas, rhs.sgas, "sgas", 1e-6)
         && compareVector(lhs.rs, rhs.rs, "rs", 1e-4)
         && compareVector(lhs.rv, rhs.rv, "rv", 1e-4)
-        && compareVector(lhs.temperature, rhs.temperature, "temperature", 1e-6);
+        && compareVector(lhs.temperature, rhs.temperature, "temperature", 1e-6)
+        && compareVector(lhs.relPerm, rhs.relPerm, "relPerm", 1e-5)
+        && compareVector(lhs.capPressure, rhs.capPressure, "capPressure", 1e-2);
 
     return basicMatch;
 }
@@ -254,7 +259,8 @@ int main(int argc, char** argv)
                 return fail("summary sample time mismatch");
             }
 
-            if (!compareVector(lhs.values, rhs.values, "summaryValues", 1e-10)) {
+            // A summary file holds floats, as a restart file does.
+            if (!compareVector(lhs.values, rhs.values, "summaryValues", 1e-6)) {
                 return fail("summary sample payload mismatch at index " + std::to_string(i));
             }
         }
