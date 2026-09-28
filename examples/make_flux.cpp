@@ -2697,22 +2697,34 @@ int run(const Options& opt)
 
     // Steps outer, regions inner, so each restart array is read once however
     // many regions were asked for.
+    //
+    // The initial restart has no summary step to go with it, but its state
+    // goes in as a record of zero length, as DUMPFLUX writes one. No step
+    // ever falls in it; it is where a reduced run interpolating the boundary
+    // in time starts from over the first record, which would otherwise be
+    // held at its end state throughout.
+    const bool writeInitialRecord = hasPressureMode(fluxMode) && (restartStepStartIndex == 1);
     double previousTime = 0.0;
-    for (std::size_t stepIdx = restartStepStartIndex; stepIdx < reportSteps.size(); ++stepIdx) {
+    for (std::size_t stepIdx = writeInitialRecord ? 0 : restartStepStartIndex;
+         stepIdx < reportSteps.size(); ++stepIdx)
+    {
         const int sourceReportStep = reportSteps[stepIdx];
+        const bool initialRecord = stepIdx < restartStepStartIndex;
 
         // Summary report step N is at index N-1 when the pairing goes by step
         // number; by position the two sequences advance together.
-        const auto summaryStepIdx = pairSummaryByPosition
-            ? (stepIdx - restartStepStartIndex)
-            : static_cast<std::size_t>(sourceReportStep - 1);
+        const auto summaryStepIdx = initialRecord
+            ? std::size_t{0}
+            : (pairSummaryByPosition
+               ? (stepIdx - restartStepStartIndex)
+               : static_cast<std::size_t>(sourceReportStep - 1));
 
-        const int reportStep = summaryPayload
-            ? static_cast<int>(summaryStepIdx + 1)
-            : sourceReportStep;
-        const int simStep = summaryPayload
-            ? static_cast<int>(summaryStepIdx + 1)
-            : sourceReportStep;
+        const int reportStep = initialRecord
+            ? 0
+            : (summaryPayload
+               ? static_cast<int>(summaryStepIdx + 1)
+               : sourceReportStep);
+        const int simStep = reportStep;
 
         std::vector<double> pressure, swat, sgas, rs, rv, temperature;
         std::vector<double> poreVolume;
@@ -2732,7 +2744,7 @@ int run(const Options& opt)
         }
 
         double currentTime = previousTime;
-        if (summaryPayload) {
+        if (summaryPayload && !initialRecord) {
             currentTime = summaryPayload->reportTimes[summaryStepIdx] * secondsPerDay;
         }
 
@@ -2745,7 +2757,7 @@ int run(const Options& opt)
                                                 previousTime,
                                                 0.0);
 
-            if (hasFluxMode(fluxMode)) {
+            if (hasFluxMode(fluxMode) && !initialRecord) {
                 fillFluxStepData(step,
                                  region,
                                  restart,

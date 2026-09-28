@@ -699,7 +699,8 @@ public:
         // caches the boundary state and mass rates from whatever record is
         // current and starts the well model's step, whose rate converter reads
         // the record's sums for the cells outside the sector.
-        this->refreshFluxBoundaryRecord_(static_cast<double>(this->simulator().time()));
+        this->refreshFluxBoundaryRecord_(static_cast<double>(this->simulator().time()),
+                                         this->fluxParentSummaryTime_());
 
         // The parent's rates are averages over its own steps, which need not
         // be this run's, so everything taken from its summary for this step is

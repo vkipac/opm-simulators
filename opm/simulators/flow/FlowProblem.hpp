@@ -1612,14 +1612,70 @@ protected:
         return this->fluxBoundaryActiveRecord_;
     }
 
-    //! \brief Point the cached boundary record at the record covering \p time.
-    void refreshFluxBoundaryRecord_(const double time)
+    //! \brief Point the cached boundary record at the record covering the step
+    //!        (\p time, \p stepEnd].
+    //!
+    //! \details A record holds the parent's state at the END of the interval
+    //!   it covers. Held over the whole interval, that state reaches the
+    //!   sector early: a front that crosses the boundary late in a long
+    //!   interval is imposed from its start, and when the parent wrote records
+    //!   only every year or two, as a restart-based file often has, that is a
+    //!   year or two early. Interpolating between the previous record's state
+    //!   and this one's, at the end of the step as an implicit step wants it,
+    //!   keeps the boundary on the parent's trajectory, and gives back the
+    //!   recorded state exactly whenever a step ends on a record's time.
+    //!
+    //!   Only the state is interpolated. Flux-mode mass rates are averages
+    //!   over the record's interval and stay as recorded.
+    void refreshFluxBoundaryRecord_(const double time, const double stepEnd)
     {
         const auto* data = this->fluxBoundaryData_();
 
         this->fluxBoundaryActiveRecord_ = (data == nullptr)
             ? nullptr
             : FluxBoundary::selectRecordAt(*data, time);
+
+        if (!this->fluxBoundaryInterpolate_
+            || (this->fluxBoundaryActiveRecord_ == nullptr)
+            || (this->fluxBoundaryActiveRecord_ == &data->reportSteps.front())
+            || !(this->fluxBoundaryActiveRecord_->stepLength > 0.0))
+        {
+            return;
+        }
+
+        const auto& record = *this->fluxBoundaryActiveRecord_;
+        const auto& previous = *(this->fluxBoundaryActiveRecord_ - 1);
+        const auto weight = std::clamp((stepEnd - record.startTime) / record.stepLength, 0.0, 1.0);
+        if (!(weight < 1.0)) {
+            return;
+        }
+
+        auto& blended = this->fluxBoundaryBlendedRecord_;
+        blended = record;
+
+        const auto blend = [weight](std::vector<double>& values, const std::vector<double>& before)
+        {
+            if (before.size() != values.size()) {
+                return;
+            }
+            for (std::size_t i = 0; i < values.size(); ++i) {
+                if (std::isfinite(values[i]) && std::isfinite(before[i])) {
+                    values[i] = before[i] + weight * (values[i] - before[i]);
+                }
+            }
+        };
+
+        blend(blended.pressures, previous.pressures);
+        blend(blended.swat, previous.swat);
+        blend(blended.sgas, previous.sgas);
+        blend(blended.rs, previous.rs);
+        blend(blended.rv, previous.rv);
+        blend(blended.temperature, previous.temperature);
+        blend(blended.relPerm, previous.relPerm);
+        blend(blended.capPressure, previous.capPressure);
+        blend(blended.externalRegionSums, previous.externalRegionSums);
+
+        this->fluxBoundaryActiveRecord_ = &blended;
     }
 
     //! \brief The parent run's summary vectors, or nullptr when unavailable.
@@ -2209,16 +2265,21 @@ protected:
         this->applyFluxBoundaryTransmissibilityOverrides_();
         this->reportUnmappedFluxBoundaryFaces_();
 
-        OpmLog::info(fmt::format("USEFLUX: {} boundary record(s) read from '{}' ({})",
+        this->fluxBoundaryInterpolate_ = Parameters::Get<Parameters::FluxBoundaryInterpolate>();
+
+        OpmLog::info(fmt::format("USEFLUX: {} boundary record(s) read from '{}' ({}), {}",
                                  fluxData.reportSteps.size(),
                                  selectedFluxPath.string(),
                                  fluxData.header.boundaryPerTimestep
                                  ? "per time step"
-                                 : "per report step"));
+                                 : "per report step",
+                                 this->fluxBoundaryInterpolate_
+                                 ? "interpolated in time between records"
+                                 : "each held over the interval it covers"));
 
         // Start out on the record covering the initial time, so that the very
         // first assembly does not run without one.
-        this->refreshFluxBoundaryRecord_(0.0);
+        this->refreshFluxBoundaryRecord_(0.0, 0.0);
 
         if (!this->fluxBoundary_->faces().empty()) {
             this->nonTrivialBoundaryConditions_ = true;
@@ -2655,6 +2716,8 @@ protected:
     std::shared_ptr<FluxBoundary> fluxBoundary_;
     std::shared_ptr<ParentSummary> fluxParentSummaryData_;
     const EclIO::FluxFile::ReportStep* fluxBoundaryActiveRecord_ = nullptr;
+    EclIO::FluxFile::ReportStep fluxBoundaryBlendedRecord_;
+    bool fluxBoundaryInterpolate_ = true;
     bool nonTrivialBoundaryConditions_ = false;
     bool first_step_ = true;
 

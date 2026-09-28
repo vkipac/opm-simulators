@@ -44,12 +44,13 @@ fi
 
 # The times decide it. Reading the summary by position would give 1 and 2;
 # pairing by report step number gives 2 and 4, which is when the parent
-# actually wrote those restarts.
+# actually wrote those restarts. The initial state comes first, at 0, as it does
+# in a DUMPFLUX file.
 times="$("$inspect_flux_bin" SPARSE.FLUX 1 1 2 | awk '$1 ~ /^[0-9]+$/ { print $1 }' | tr '\n' ' ')"
 
-if [[ "$times" != "2 4 " ]]; then
-    echo "check-make-flux-sparse-restart: records are at times [$times], expected [2 4 ]" >&2
-    echo "A pairing by position would give [1 2 ]." >&2
+if [[ "$times" != "0 2 4 " ]]; then
+    echo "check-make-flux-sparse-restart: records are at times [$times], expected [0 2 4 ]" >&2
+    echo "A pairing by position would give [0 1 2 ]." >&2
     exit 1
 fi
 
