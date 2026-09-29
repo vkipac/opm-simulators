@@ -21,7 +21,10 @@
 
 #include <opm/common/OpmLog/OpmLog.hpp>
 
+#include <opm/input/eclipse/Schedule/SummaryState.hpp>
 #include <opm/input/eclipse/Units/Units.hpp>
+
+#include <opm/io/eclipse/SummaryNode.hpp>
 
 #include <opm/io/eclipse/ESmry.hpp>
 #include <opm/io/eclipse/ExtESmry.hpp>
@@ -33,6 +36,7 @@
 #include <exception>
 #include <iterator>
 #include <limits>
+#include <regex>
 #include <string>
 #include <utility>
 
@@ -119,6 +123,79 @@ SummaryConfigNode::Type ParentSummary::keyType(const std::string& key)
     }
 
     return parseKeywordType(keyword);
+}
+
+void ParentSummary::assign(SummaryState& state, const std::string& key, const double value)
+{
+    const auto firstColon = key.find(':');
+    const auto secondColon = (firstColon == std::string::npos)
+        ? std::string::npos
+        : key.find(':', firstColon + 1);
+
+    const auto keyword = key.substr(0, firstColon);
+
+    switch (EclIO::SummaryNode::category_from_keyword(keyword)) {
+    case EclIO::SummaryNode::Category::Well:
+        if (firstColon != std::string::npos) {
+            state.update_well_var(key.substr(firstColon + 1), keyword, value);
+        }
+        break;
+
+    case EclIO::SummaryNode::Category::Group:
+        if (firstColon != std::string::npos) {
+            state.update_group_var(key.substr(firstColon + 1), keyword, value);
+        }
+        break;
+
+    case EclIO::SummaryNode::Category::Connection:
+    case EclIO::SummaryNode::Category::Completion:
+        if (secondColon != std::string::npos) {
+            state.update_conn_var(key.substr(firstColon + 1, secondColon - firstColon - 1),
+                                  keyword,
+                                  static_cast<std::size_t>(std::stoul(key.substr(secondColon + 1))),
+                                  value);
+        }
+        break;
+
+    case EclIO::SummaryNode::Category::Segment:
+        if (secondColon != std::string::npos) {
+            state.update_segment_var(key.substr(firstColon + 1, secondColon - firstColon - 1),
+                                     keyword,
+                                     static_cast<std::size_t>(std::stoul(key.substr(secondColon + 1))),
+                                     value);
+        }
+        break;
+
+    case EclIO::SummaryNode::Category::Region:
+        // Held apart from other values, keyed by region set and number, so
+        // that a UDQ can find them.
+        if (const auto region = regionOf(key); region.has_value()) {
+            state.update_region_var(region->first, keyword, region->second, value);
+        }
+        else {
+            state.set(key, value);
+        }
+        break;
+
+    default:
+        state.set(key, value);
+        break;
+    }
+}
+
+std::optional<std::pair<std::string, int>> ParentSummary::regionOf(const std::string& key)
+{
+    // RPR, RPR__REC, RGPR_EQL: the quantity, then optionally the region set's
+    // name padded to eight characters with underscores.
+    static const auto pattern = std::regex { R"((R[A-Z]{2,4})_{0,2}([A-Z0-9]{1,3})?:([0-9]+))" };
+
+    auto pieces = std::smatch {};
+    if (!std::regex_match(key, pieces, pattern)) {
+        return std::nullopt;
+    }
+
+    const auto set = pieces[2].matched ? "FIP" + pieces[2].str() : std::string { "FIPNUM" };
+    return std::make_pair(set, std::stoi(pieces[3].str()));
 }
 
 std::optional<ParentSummary>

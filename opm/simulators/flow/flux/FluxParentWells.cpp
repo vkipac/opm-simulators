@@ -33,6 +33,7 @@
 
 #include <cmath>
 #include <limits>
+#include <map>
 #include <memory>
 #include <unordered_map>
 
@@ -180,7 +181,10 @@ EclIO::FluxFile::ParentWells describeFluxParentWells(const Schedule& schedule)
 }
 
 std::vector<std::string>
-addFluxParentWells(Schedule& schedule, const EclIO::FluxFile::ParentWells& parent)
+addFluxParentWells(Schedule& schedule,
+                   const EclIO::FluxFile::ParentWells& parent,
+                   const ParseContext& parseContext,
+                   ErrorGuard& errors)
 {
     std::vector<std::string> added;
     if (parent.empty()) {
@@ -213,7 +217,7 @@ addFluxParentWells(Schedule& schedule, const EclIO::FluxFile::ParentWells& paren
     std::vector<int> groupParent(numGroups, -1);
     std::vector<double> groupEfficiency(numGroups, 1.0);
 
-    std::unordered_map<std::string, double> wellPI;
+    std::map<std::size_t, std::vector<DeckKeyword>> keywordsByStep;
 
     for (std::size_t step = 0; step < schedule.size(); ++step) {
         const auto p = parentStepAt(parent.stepStart, static_cast<double>(schedule.simTime(step)));
@@ -313,10 +317,18 @@ addFluxParentWells(Schedule& schedule, const EclIO::FluxFile::ParentWells& paren
         append("WEFAC", wefac);
 
         if (!text.empty()) {
-            auto keywords = parseKeywords(text);
-            schedule.applyKeywords(keywords, wellPI, /*action_mode=*/false, step);
+            auto& keywords = keywordsByStep[step];
+            for (auto& keyword : parseKeywords(text)) {
+                keywords.push_back(std::move(*keyword));
+            }
         }
     }
+
+    // All at once: the schedule is rebuilt a single time, and every keyword
+    // of the deck is then handled with every added well in place. Inserted
+    // step by step, each rebuild would meet the deck's references to wells not
+    // yet added, a UDQ over one of them for instance.
+    schedule.insertKeywords(keywordsByStep, parseContext, errors);
 
     return added;
 }

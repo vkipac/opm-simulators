@@ -12,8 +12,12 @@ set -euo pipefail
 # This parent has P1 in the sector, and P2 in the same group outside it with an
 # efficiency factor, and I1 outside it as the only well of a group the sector
 # deck does not have. The sector deck lists P1 alone. G1's target is shared
-# between P1 and P2, so P1's own rate is only right if P2 takes its share, and
-# the UDQs read P2's rate and bottom-hole pressure and sum over all wells.
+# between P1 and P2, so P1's own rate is only right if P2 takes its share. The
+# UDQs read P2's rate, bottom-hole pressure and block average pressure, sum
+# over all wells, and read the field pressure, the pressure of a FIPNUM region
+# that straddles the sector's edge and the oil rate of one wholly outside it,
+# which the sector deck's own FIPNUM does not even have. None of those can be
+# computed from the sector, and each has to come out as in the parent.
 
 flow_bin="$1"
 make_flux_bin="$2"
@@ -51,7 +55,8 @@ if ! grep -q "USEFLUX: 2 well(s) of the parent run are not in this deck" "sector
 fi
 
 vectors=(FOPR FOPT FWIR FWIT FVPR FVPT GOPR:G1 GOPT:G1 GWIR:WI
-         WOPR:P1 WOPR:P2 WWIR:I1 FU_P2 FU_WSUM FU_BHP2)
+         WOPR:P1 WOPR:P2 WWIR:I1 FU_P2 FU_WSUM FU_BHP2
+         FU_BP4P2 FU_RPR1 FU_ROPR2 FU_FPR)
 
 values() {
     "$summary_bin" -r -n "$1.SMSPEC" "${vectors[@]}"

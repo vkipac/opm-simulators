@@ -58,6 +58,7 @@
 #include <opm/simulators/flow/FlowProblemParameters.hpp>
 #include <opm/simulators/flow/flux/FluxDumper.hpp>
 #include <opm/simulators/flow/flux/FluxParentWells.hpp>
+#include <opm/simulators/flow/flux/ParentSummary.hpp>
 #include <opm/simulators/flow/flux/FluxSummaryKeys.hpp>
 #include <opm/simulators/flow/flux/FluxRegions.hpp>
 #include <opm/simulators/timestepping/SimulatorTimer.hpp>
@@ -90,6 +91,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <cstdio>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -475,7 +477,11 @@ public:
                               interRegFlows,
                               this->summaryState(),
                               this->udqState(),
-                              rcGroupRates ? &(*rcGroupRates) : nullptr);
+                              rcGroupRates ? &(*rcGroupRates) : nullptr,
+                              [this, curTime](SummaryState& state)
+                              {
+                                  this->applyParentOnlySummaryValues_(state, curTime);
+                              });
         }
 
         // The SummaryState is now fully populated for this step, so the
@@ -2749,6 +2755,7 @@ private:
             ? static_cast<double>(time)
             : this->fluxParentOutputTime_;
         this->fluxParentOutputTime_ = static_cast<double>(time);
+        this->fluxParentOutputStart_ = start;
 
         for (const auto& wellName : schedule.wellNames(stepIdx)) {
             const auto& well = schedule.getWell(wellName, stepIdx);
@@ -2832,6 +2839,144 @@ private:
         }
     }
 
+    //! \brief Replace with the parent's what a sector cannot compute, before
+    //!        the UDQs are evaluated.
+    //!
+    //! \details Called between Summary::eval() and the UDQ evaluation. The
+    //!   parent's values were seeded into the SummaryState at the start of
+    //!   the step, but Summary::eval() then overwrites every vector the run
+    //!   reports with what it computes itself, and for anything that lies
+    //!   outside the sector that is zero, or covers the sector's cells only: a
+    //!   well it has no solution for, a segment of one, a region it holds part
+    //!   of, a block it does not have, a field pressure. A UDQ over any of
+    //!   those, and every ACTIONX and group target that reads the UDQ, would
+    //!   then go its own way. So these are put back to the parent's values,
+    //!   which also makes them what the run reports.
+    //!
+    //!   What the sector does compute correctly is left alone: every quantity
+    //!   of a well it simulates, the rates and totals of field and group from
+    //!   which the parent-only wells' rates are already summed, cumulative
+    //!   quantities, which accumulate from those rates, and the UDQs, which
+    //!   are evaluated next.
+    void applyParentOnlySummaryValues_(SummaryState& summaryState, const Scalar time)
+    {
+        const auto* parent = this->simulator_.problem().fluxParentSummary();
+        if (parent == nullptr) {
+            return;
+        }
+
+        // A UDQ over a region the sector does not hold, such as RGPR_EQL 1
+        // with all of EQLNUM 1 outside it, is refused when its region set
+        // has no such region. The regions the parent reported are the ones
+        // its UDQs read, so those are made known.
+        if (!this->udqRegionStatistics_.has_value()) {
+            auto statistics = this->eclState_.fipRegionStatistics();
+            for (const auto& key : parent->keys()) {
+                if (const auto region = ParentSummary::regionOf(key); region.has_value()) {
+                    statistics.raiseMaximumRegionID(region->first, region->second);
+                }
+            }
+            this->udqRegionStatistics_ = std::move(statistics);
+        }
+
+        const auto& vanguard = this->simulator_.vanguard();
+        const auto& schedule = vanguard.schedule();
+        const auto& grid = vanguard.eclState().getInputGrid();
+        const auto stepIdx =
+            static_cast<std::size_t>(std::max(this->simulator_.episodeIndex(), 0));
+
+        // In a USEFLUX run the schedule was built on the sector's cells, so a
+        // well outside it has no connections, whether the deck completed it
+        // outside the sector or the well was added from the FLUX file.
+        std::unordered_set<std::string> absentWells;
+        for (const auto& wellName : schedule.wellNames(stepIdx)) {
+            if (schedule.getWell(wellName, stepIdx).getConnections().empty()) {
+                absentWells.insert(wellName);
+            }
+        }
+
+        // Given to the parent-only wells by injectParentOnlyWellData_(), or
+        // summed over them by Summary::eval().
+        static const std::unordered_set<std::string> fromWellRates {
+            "OPR", "WPR", "GPR", "VPR", "LPR", "OIR", "WIR", "GIR", "VIR", "LIR",
+            "GOR", "WCT", "GLR", "OGR", "WGR", "BHP", "THP",
+        };
+
+        const auto isUdq = [](const std::string& keyword)
+        {
+            return (keyword.size() > 1) && (keyword[1] == 'U');
+        };
+
+        const auto start = this->fluxParentOutputStart_;
+        const auto end = static_cast<double>(time);
+
+        for (const auto& key : parent->keys()) {
+            const auto colon = key.find(':');
+            const auto keyword = key.substr(0, colon);
+            const auto type = ParentSummary::keyType(key);
+
+            if (isUdq(keyword) || (type == SummaryConfigNode::Type::Total)) {
+                continue;
+            }
+
+            const auto quantity = keyword.substr(1);
+
+            bool fromParent = false;
+            switch (EclIO::SummaryNode::category_from_keyword(keyword)) {
+            case EclIO::SummaryNode::Category::Well:
+            case EclIO::SummaryNode::Category::Connection:
+            case EclIO::SummaryNode::Category::Completion:
+            case EclIO::SummaryNode::Category::Segment: {
+                if (colon == std::string::npos) {
+                    break;
+                }
+                const auto second = key.find(':', colon + 1);
+                const auto wellName = key.substr(colon + 1, (second == std::string::npos)
+                                                 ? std::string::npos : second - colon - 1);
+                const auto isWellVector = EclIO::SummaryNode::category_from_keyword(keyword)
+                    == EclIO::SummaryNode::Category::Well;
+                fromParent = (absentWells.count(wellName) > 0)
+                    && !(isWellVector && (fromWellRates.count(quantity) > 0));
+                break;
+            }
+
+            case EclIO::SummaryNode::Category::Field:
+            case EclIO::SummaryNode::Category::Group:
+                fromParent = fromWellRates.count(quantity) == 0;
+                break;
+
+            case EclIO::SummaryNode::Category::Region:
+                fromParent = true;
+                break;
+
+            case EclIO::SummaryNode::Category::Block: {
+                int i = 0, j = 0, k = 0;
+                if ((colon != std::string::npos)
+                    && (std::sscanf(key.c_str() + colon + 1, "%d,%d,%d", &i, &j, &k) == 3))
+                {
+                    fromParent = !grid.cellActive(i - 1, j - 1, k - 1);
+                }
+                break;
+            }
+
+            default:
+                break;
+            }
+
+            if (!fromParent) {
+                continue;
+            }
+
+            const auto value = (type == SummaryConfigNode::Type::Rate)
+                ? parent->valueOver(key, start, end)
+                : parent->valueAt(key, end);
+
+            if (std::isfinite(value)) {
+                ParentSummary::assign(summaryState, key, value);
+            }
+        }
+    }
+
     Simulator& simulator_;
     std::unique_ptr<OutputModule> outputModule_;
     Scalar restartTimeStepSize_;
@@ -2853,6 +2998,8 @@ private:
     //! When the parent-only wells were last given rates, or negative before
     //! the first time. See injectParentOnlyWellData_().
     double fluxParentOutputTime_ = -1.0;
+    //! Start of the interval the parent-only wells were last given rates for.
+    double fluxParentOutputStart_ = 0.0;
     double fluxSummaryLastSampleTime_ = 0.0;
     double fluxSummaryMinInterval_ = 0.0;
     bool fluxSummaryHasSample_ = false;

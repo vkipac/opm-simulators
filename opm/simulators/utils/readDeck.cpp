@@ -138,9 +138,12 @@ namespace {
         return { std::move(path), std::move(wells) };
     }
 
-    void addFluxParentWells(const FluxParentWellSource& source, Opm::Schedule& schedule)
+    void addFluxParentWells(const FluxParentWellSource& source,
+                            Opm::Schedule&              schedule,
+                            const Opm::ParseContext&    parseContext,
+                            Opm::ErrorGuard&            errorGuard)
     {
-        const auto added = Opm::addFluxParentWells(schedule, source.wells);
+        const auto added = Opm::addFluxParentWells(schedule, source.wells, parseContext, errorGuard);
         if (!added.empty()) {
             Opm::OpmLog::info(fmt::format("USEFLUX: {} well(s) of the parent run are not in this "
                                           "deck and have been added without connections, their "
@@ -486,7 +489,7 @@ namespace {
         eclipseState->appendAqufluxSchedule(schedule->getAquiferFluxSchedule());
 
         if (!fluxParentWells.wells.empty()) {
-            addFluxParentWells(fluxParentWells, *schedule);
+            addFluxParentWells(fluxParentWells, *schedule, *schedParseContext, errorGuard);
         }
 
         if (Opm::OpmLog::hasBackend("STDOUT_LOGGER")) {

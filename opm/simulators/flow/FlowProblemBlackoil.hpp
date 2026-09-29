@@ -384,53 +384,7 @@ public:
                 continue;
             }
 
-            const auto firstColon = key.find(':');
-            const auto secondColon = (firstColon == std::string::npos)
-                ? std::string::npos
-                : key.find(':', firstColon + 1);
-
-            const auto keyword = (firstColon == std::string::npos)
-                ? key
-                : key.substr(0, firstColon);
-
-            switch (EclIO::SummaryNode::category_from_keyword(key)) {
-            case EclIO::SummaryNode::Category::Well:
-                if (firstColon != std::string::npos) {
-                    summaryState.update_well_var(key.substr(firstColon + 1), keyword, value);
-                }
-                break;
-
-            case EclIO::SummaryNode::Category::Group:
-                if (firstColon != std::string::npos) {
-                    summaryState.update_group_var(key.substr(firstColon + 1), keyword, value);
-                }
-                break;
-
-            case EclIO::SummaryNode::Category::Connection:
-            case EclIO::SummaryNode::Category::Completion:
-                if (secondColon != std::string::npos) {
-                    summaryState.update_conn_var(
-                        key.substr(firstColon + 1, secondColon - firstColon - 1),
-                        keyword,
-                        static_cast<std::size_t>(std::stoul(key.substr(secondColon + 1))),
-                        value);
-                }
-                break;
-
-            case EclIO::SummaryNode::Category::Segment:
-                if (secondColon != std::string::npos) {
-                    summaryState.update_segment_var(
-                        key.substr(firstColon + 1, secondColon - firstColon - 1),
-                        keyword,
-                        static_cast<std::size_t>(std::stoul(key.substr(secondColon + 1))),
-                        value);
-                }
-                break;
-
-            default:
-                summaryState.set(key, value);
-                break;
-            }
+            ParentSummary::assign(summaryState, key, value);
         }
     }
 

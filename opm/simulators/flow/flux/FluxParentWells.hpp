@@ -27,6 +27,8 @@
 
 namespace Opm {
 
+class ErrorGuard;
+class ParseContext;
 class Schedule;
 
 /// The producing run's wells and groups, for the FLUX file.
@@ -51,11 +53,15 @@ EclIO::FluxFile::ParentWells describeFluxParentWells(const Schedule& schedule);
 ///
 /// Must be called before the SummaryConfig is built from the schedule, so
 /// that the added wells and groups are reported too, and on a schedule that
-/// kept its keywords, since inserting keywords replays the rest of it.
+/// kept its keywords, since inserting keywords replays the rest of it. The
+/// replay is held to \p parseContext, as the original reading was.
 ///
 /// \return Names of the wells added.
 std::vector<std::string>
-addFluxParentWells(Schedule& schedule, const EclIO::FluxFile::ParentWells& parent);
+addFluxParentWells(Schedule& schedule,
+                   const EclIO::FluxFile::ParentWells& parent,
+                   const ParseContext& parseContext,
+                   ErrorGuard& errors);
 
 } // namespace Opm
 

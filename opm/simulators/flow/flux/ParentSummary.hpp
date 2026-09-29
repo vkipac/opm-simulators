@@ -27,9 +27,12 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace Opm {
+
+class SummaryState;
 
 /// Time series of a parent (full field) run's summary vectors.
 ///
@@ -108,6 +111,14 @@ public:
 
     /// Summary type of the keyword part of a composite key such as "WOPR:P1".
     static SummaryConfigNode::Type keyType(const std::string& key);
+
+    /// Put \p value into \p state under \p key, a composite key such as
+    /// "WOPR:P1" or "SOFR:P1:3", the way the summary evaluation stores it.
+    static void assign(SummaryState& state, const std::string& key, double value);
+
+    /// Region set, as FIPNUM or FIPxxx, and region ID of a region key such as
+    /// "RPR__REC:6". Nothing for any other key.
+    static std::optional<std::pair<std::string, int>> regionOf(const std::string& key);
 
 private:
     struct Series
