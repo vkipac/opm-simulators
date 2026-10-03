@@ -431,9 +431,6 @@ void FluxDumper::validateStepData(const ReportStepData& stepData) const
         if (!stepData.rv.empty() && stepData.rv.size() != numFaces) {
             throwSizeError("rv", numFaces, stepData.rv.size());
         }
-        if (!stepData.temperature.empty() && stepData.temperature.size() != numFaces) {
-            throwSizeError("temperature", numFaces, stepData.temperature.size());
-        }
     }
     else {
         if (!stepData.pressures.empty()) {
@@ -451,9 +448,10 @@ void FluxDumper::validateStepData(const ReportStepData& stepData) const
         if (!stepData.rv.empty()) {
             throwSizeError("rv", 0, stepData.rv.size());
         }
-        if (!stepData.temperature.empty()) {
-            throwSizeError("temperature", 0, stepData.temperature.size());
-        }
+    }
+
+    if (!stepData.temperature.empty() && stepData.temperature.size() != numFaces) {
+        throwSizeError("temperature", numFaces, stepData.temperature.size());
     }
 }
 
