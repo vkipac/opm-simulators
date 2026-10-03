@@ -504,6 +504,7 @@ private:
         unsigned numCells = model.numTotalDof();
         neighborInfo_.reserve(numCells, 6 * numCells); // Expect ~6 neighbors per cell
         std::vector<NeighborInfoCPU> loc_nbinfo;
+        std::vector<bool> onDomainBoundary;
         for (const auto& elem : elements(gridView_())) {
             stencil.update(elem);
 
@@ -556,11 +557,19 @@ private:
                 }
                 neighborInfo_.appendRow(loc_nbinfo.begin(), loc_nbinfo.end());
                 if (problem_().nonTrivialBoundaryConditions()) {
+                    // The stencil's boundary faces include intersections that leave
+                    // this rank; only those on the domain boundary carry a condition.
+                    onDomainBoundary.clear();
+                    for (const auto& intersection : intersections(gridView_(), elem)) {
+                        if (!intersection.neighbor()) {
+                            onDomainBoundary.push_back(intersection.boundary());
+                        }
+                    }
                     for (unsigned bfIndex = 0; bfIndex < stencil.numBoundaryFaces(); ++bfIndex) {
                         const auto& bf = stencil.boundaryFace(bfIndex);
                         const int dir_id = bf.dirId();
                         // not for NNCs
-                        if (dir_id < 0) {
+                        if (dir_id < 0 || !onDomainBoundary[bfIndex]) {
                             continue;
                         }
                         const auto [type, massrateAD] = problem_().boundaryCondition(myIdx, dir_id);
