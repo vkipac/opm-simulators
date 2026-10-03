@@ -127,6 +127,8 @@ list (APPEND MAIN_SOURCE_FILES
   opm/simulators/flow/GenericTemperatureModel.cpp
   opm/simulators/flow/GenericThresholdPressure.cpp
   opm/simulators/flow/GenericTracerModel.cpp
+  opm/simulators/flow/flux/FluxDumper.cpp
+  opm/simulators/flow/flux/FluxRegions.cpp
   opm/simulators/flow/HybridNewtonConfig.cpp
   opm/simulators/flow/InterRegFlows.cpp
   opm/simulators/flow/KeywordValidation.cpp
@@ -517,6 +519,8 @@ list (APPEND TEST_SOURCE_FILES
   tests/test_glift1.cpp
   tests/test_graphcoloring.cpp
   tests/test_GroupState.cpp
+  tests/test_FluxDumper.cpp
+  tests/test_FluxRegions.cpp
   tests/test_ignore_keywords.cpp
   tests/test_InjectedPhase.cpp
   tests/test_injection_topup_phase_validation.cpp
@@ -1152,6 +1156,8 @@ list (APPEND PUBLIC_HEADER_FILES
   opm/simulators/flow/OutputBlackoilModule.hpp
   opm/simulators/flow/OutputCompositionalModule.hpp
   opm/simulators/flow/OutputExtractor.hpp
+  opm/simulators/flow/flux/FluxDumper.hpp
+  opm/simulators/flow/flux/FluxRegions.hpp
   opm/simulators/flow/partitionCells.hpp
   opm/simulators/flow/PolyhedralGridVanguard.hpp
   opm/simulators/flow/priVarsPacking.hpp
