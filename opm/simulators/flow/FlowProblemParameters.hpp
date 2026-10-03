@@ -79,6 +79,25 @@ struct TracerSolver { static constexpr auto value = "istl"; };
 // Time steps that use the ISTL tracer solver after the reorder solver failed for a tracer batch
 struct TracerReorderRetrySteps { static constexpr int value = 10; };
 
+// Minimum time, in DAYS, between consecutive parent summary samples written to
+// the .FLUX file by a DUMPFLUX run.  Every time step is sampled unless doing so
+// would place the sample within this interval of the previous one; report step
+// boundaries are always sampled.  Zero samples every time step.
+template<class Scalar>
+struct FluxSummaryMinIntervalBetweenSamples { static constexpr Scalar value = 1.0; };
+
+// Minimum time, in DAYS, between consecutive sector boundary records written to
+// the .FLUX file by a DUMPFLUX run.  Every time step is written unless doing so
+// would place the record within this interval of the previous one; report step
+// boundaries are always written.  Zero writes every time step.
+template<class Scalar>
+struct FluxBoundaryMinIntervalBetweenSamples { static constexpr Scalar value = 1.0; };
+
+// Write sector boundary data once per report step rather than per time step.
+// This is the behaviour of earlier versions and is generally less accurate for
+// models whose boundary flow varies within a report step.
+struct FluxBoundaryReportStepsOnly { static constexpr bool value = false; };
+
 } // namespace Opm::Parameters
 
 namespace Opm {
