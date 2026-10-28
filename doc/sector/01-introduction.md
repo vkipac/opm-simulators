@@ -56,31 +56,35 @@ deck.](images/workflow.png){width=95%}
 |:--|:--|:--|
 | FLUXNUM | GRID | Region array defining the sectors, over the whole grid. Zero means no sector. |
 | DUMPFLUX | GRID | Write a FLUX file for each FLUXNUM region during the run. |
-| FLUXTYPE | GRID | `'FLUX'`, `'PRESSURE'` or `'BOTH'`: which kind of boundary data a DUMPFLUX run writes. Default `'FLUX'`. |
-| USEFLUX | GRID | Run on one sector only, with boundary conditions from a FLUX file. The optional item names the file; by default it is the deck's own base name. |
+| FLUXTYPE | GRID | `'FLUX'`, `'PRESSURE'` or `'BOTH'`: which kind of boundary data a DUMPFLUX run writes, by default `'PRESSURE'`. In a USEFLUX run, `'PRESSURE'` (the default) or `'FLUX'`: which kind it imposes. |
+| USEFLUX | GRID | Run on one sector only, with boundary conditions from a FLUX file. The first item names the file and is required. The second, `'YES'` by default, lets the run go on past the end of the file's data; `'NO'` stops it there. |
 | FLUXREG | GRID | Which FLUXNUM region the USEFLUX run covers. |
 | FLUXALL | SUMMARY | In the parent run: report the summary vectors a reduced run needs. |
 | FPRFLUX | SUMMARY | In a reduced run: field pressure averaged over the whole parent model. Added automatically to every USEFLUX run. |
 
 A DUMPFLUX run writes `CASE.FLUX` when FLUXNUM has a single region, and
 `CASE.FLUX0001`, `CASE.FLUX0002` and so on, one per region, when it has
-several. A USEFLUX run reads one of those files. FLUXNUM alone, without
-DUMPFLUX, is just a region array, as it is when MULTREGT uses it.
+several. A USEFLUX run reads one of those files. If it runs on past the last
+record in the file, the boundary is held at that record and a warning is
+printed. FLUXNUM alone, without DUMPFLUX, is just a region array, as it is
+when MULTREGT uses it.
 
 ## Pressure and flux boundaries
 
 The boundary of the sector can be driven in two ways. FLUXTYPE in the parent
-deck decides which, and the reduced run follows whatever the file contains.
+deck decides what the file holds, and FLUXTYPE in the reduced deck which of
+it is imposed. A reduced run stops if the file does not hold what it asks
+for.
 
-* **Pressure boundary** (`FLUXTYPE 'PRESSURE'`). The FLUX file records the
-  state of the cell on the far side of every boundary face: its pressure,
-  saturations, dissolved gas-oil ratio Rs, vaporised oil-gas ratio Rv,
-  relative permeabilities and capillary pressures. The reduced run imposes
-  that state on the far side of the face, and computes the flow across it
-  from the transmissibility the parent had there. The flow therefore responds
-  to what happens inside the sector: if a well is added near the boundary,
-  more fluid is drawn in from outside. This is the mode to use for studying
-  changes inside the sector.
+* **Pressure boundary** (`FLUXTYPE 'PRESSURE'`, the default). The FLUX file
+  records the state of the cell on the far side of every boundary face: its
+  pressure, saturations, dissolved gas-oil ratio Rs, vaporised oil-gas ratio
+  Rv, relative permeabilities and capillary pressures. The reduced run
+  imposes that state on the far side of the face, and computes the flow
+  across it from the transmissibility the parent had there. The flow
+  therefore responds to what happens inside the sector: if a well is added
+  near the boundary, more fluid is drawn in from outside. This is the mode
+  to use for studying changes inside the sector.
 
 * **Flux boundary** (`FLUXTYPE 'FLUX'`). The FLUX file records the mass of
   each component (oil, gas, water) that crossed every boundary face. The
@@ -88,8 +92,9 @@ deck decides which, and the reduced run follows whatever the file contains.
   parent very closely, since the same amount of fluid enters and leaves as in
   the parent, but it does not respond to changes inside the sector.
 
-* **Both** (`FLUXTYPE 'BOTH'`). Both kinds of data are written to the file.
-  A reduced run on such a file imposes the rates.
+* **Both** (`FLUXTYPE 'BOTH'`). Both kinds of data are written to the file,
+  which then serves either kind of reduced run. Such a file is about 1.3
+  times the size of a pressure file and 4.5 times that of a flux file.
 
 ## Boundary accuracy
 
