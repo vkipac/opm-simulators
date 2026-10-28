@@ -228,12 +228,15 @@ everywhere.
 
 `FlowProblem::readFluxBoundary_()` then reads the FLUX file and checks it.
 The file is `<name>.FLUX` in the deck's directory, where `<name>` is the
-USEFLUX item or the deck's own base name; if no such file exists, the
-lowest-numbered `<name>.FLUXnnnn` is used. The parent's cell indices are
-mapped onto the reduced grid, which must have the dimensions of either the
-parent grid or the region's bounding box recorded in the header. Every
-boundary face is matched to a face of the reduced grid; faces that cannot be
-matched are reported, since whatever crossed them would be lost.
+first USEFLUX item; if no such file exists, the lowest-numbered
+`<name>.FLUXnnnn` is used. FLUXTYPE in the reduced deck, `'PRESSURE'`
+unless it says `'FLUX'`, chooses which of the file's data is imposed; a
+file without that data is an error, and the header's mode is narrowed to
+it, so that the rest of the run sees a single mode. The parent's cell
+indices are mapped onto the reduced grid, which must have the dimensions of
+either the parent grid or the region's bounding box recorded in the header.
+Every boundary face is matched to a face of the reduced grid; faces that
+cannot be matched are reported, since whatever crossed them would be lost.
 
 ### Choosing the record
 
@@ -243,6 +246,13 @@ interpolated linearly between that record and the previous one, evaluated at
 the end of the step, since the step is implicit. Where a step ends on a
 record's time, the recorded state is used as it is. Rates are averages over
 their interval and are not interpolated.
+
+Past the last record the boundary is held at that record, and the parent's
+summary vectors at their last sample. `checkFluxBoundaryCoverage_()`, called
+at the start of every report step, warns once when the step ends after the
+last record, or throws if the second item of USEFLUX is `'NO'`. It runs
+before the time stepping, whose step chopping would otherwise catch the
+error.
 
 ### Flux boundary
 
