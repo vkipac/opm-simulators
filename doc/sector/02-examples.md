@@ -101,11 +101,10 @@ EQUALS
 ```
 
 USEFLUX names the FLUX file to read, `DUMP-SECTOR.FLUX`, and FLUXREG selects
-region 1. FLUXTYPE has no effect in a reduced run, since the file says which
-kind of boundary it holds, and is only kept so that the decks differ in as
-little as possible. FLUXALL can be left out. Nothing needs to change in the
-SCHEDULE section: the wells outside the sector are still there, and simply
-have no connections in the reduced grid.
+region 1. FLUXTYPE `'PRESSURE'` imposes the recorded exterior state; it is
+the default in a reduced run and could be left out. FLUXALL can be left
+out. Nothing needs to change in the SCHEDULE section: the wells outside the
+sector are still there, and simply have no connections in the reduced grid.
 
 ```
 flow USE-SECTOR.DATA
@@ -115,7 +114,7 @@ The print file reports what was read:
 
 ```
 USEFLUX: 157 boundary record(s) read from 'DUMP-SECTOR.FLUX' (per time step),
-         interpolated in time between records
+         interpolated in time between records, imposed as pressure boundaries
 USEFLUX: summary vectors loaded from flux file 'DUMP-SECTOR.FLUX' (176 keys, 156 samples)
 USEFLUX: adopted the producing run's threshold pressures over 7 equilibration region(s)
 ```
@@ -128,20 +127,24 @@ active.](images/full_pressure.png){width=80%}
 
 ### Flux boundaries
 
-For a flux boundary, FLUXTYPE in the parent is changed to `'FLUX'`
-(`DUMP-SECTOR-FLUX.DATA`), and the reduced deck reads the resulting file
-(`USE-SECTOR-FLUX.DATA`):
+For a flux boundary, FLUXTYPE is changed to `'FLUX'` in both the parent
+(`DUMP-SECTOR-FLUX.DATA`) and the reduced deck, which reads the resulting
+file (`USE-SECTOR-FLUX.DATA`):
 
 ```
 -- parent, DUMP-SECTOR-FLUX.DATA       -- reduced, USE-SECTOR-FLUX.DATA
 DUMPFLUX                               USEFLUX
                                          'DUMP-SECTOR-FLUX' /
-FLUXTYPE                               FLUXREG
-  'FLUX' /                               1 /
+FLUXTYPE                               FLUXTYPE
+  'FLUX' /                               'FLUX' /
+
+                                       FLUXREG
+                                         1 /
 ```
 
 A flux-mode file only holds the component mass rates across each face, and
-is smaller: 9.7 MB against 34 MB.
+is smaller: 9.7 MB against 34 MB. A parent run with FLUXTYPE `'BOTH'` writes
+one file of 43 MB that serves both kinds of reduced run.
 
 ### Results
 
@@ -269,7 +272,7 @@ wells, and they are added without connections:
 USEFLUX: 5 well(s) of the parent run are not in this deck and have been added without
          connections, their rates taken from '../../TEST.FLUX': R_A2 R_A5 A1 A2 A5
 USEFLUX: 7 boundary record(s) read from '../../TEST.FLUX' (per report step),
-         interpolated in time between records
+         interpolated in time between records, imposed as pressure boundaries
 ```
 
 ![Pressure at the end of the run in the cut-out sector model, on the file

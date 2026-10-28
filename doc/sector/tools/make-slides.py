@@ -305,8 +305,8 @@ table(s, [
     ["Keyword", "Section", "Purpose"],
     ["FLUXNUM", "GRID", "Region array defining the sectors over the whole grid; 0 means no sector"],
     ["DUMPFLUX", "GRID", "Write a FLUX file for each FLUXNUM region during the run"],
-    ["FLUXTYPE", "GRID", "`'PRESSURE'`, `'FLUX'` or `'BOTH'`: which boundary data DUMPFLUX writes (default `'FLUX'`)"],
-    ["USEFLUX", "GRID", "Run one sector only, with the boundary from a FLUX file; optional file name"],
+    ["FLUXTYPE", "GRID", "`'PRESSURE'`, `'FLUX'` or `'BOTH'`: which boundary data DUMPFLUX writes (default `'PRESSURE'`); in a USEFLUX run `'PRESSURE'` (default) or `'FLUX'`, which boundary is imposed"],
+    ["USEFLUX", "GRID", "Run one sector only, with the boundary from the named FLUX file; second item NO stops the run past the file's data"],
     ["FLUXREG", "GRID", "Which FLUXNUM region the USEFLUX run covers"],
     ["FLUXALL", "SUMMARY", "In the parent: report the summary vectors a reduced run needs"],
     ["FPRFLUX", "SUMMARY", "In a reduced run: field pressure over the whole parent model (automatic)"],
@@ -372,8 +372,8 @@ card(s, x2, TOP, cw, Inches(4.55), "Flux  ·  FLUXTYPE 'FLUX'", [
     "**Does not respond** to changes inside the sector",
 ], ORANGE_CARD, size=20)
 bullets(s, [
-    "FLUXTYPE is set in the **parent**; the reduced run follows whatever the file holds",
-    "`'BOTH'` writes both kinds of data; a reduced run then imposes the rates",
+    "Parent: FLUXTYPE picks what is written (default `'PRESSURE'`; `'BOTH'` serves either kind of run)",
+    "Reduced run: FLUXTYPE `'PRESSURE'` (default) or `'FLUX'` picks what is imposed",
 ], y=TOP + Inches(4.7), h=Inches(0.9), size=19, gap=2)
 
 s = new_slide("Boundary details handled for you")
@@ -507,14 +507,15 @@ code(s, "flow USE-SECTOR.DATA", x1, TOP + Inches(4.3), cw, Inches(0.5), size=15)
 bullets(s, [
     "USEFLUX names the FLUX file, without `.FLUX`",
     "FLUXREG selects the region",
-    "FLUXTYPE is ignored: **the file decides** the boundary type",
+    "FLUXTYPE picks the boundary type (default `'PRESSURE'`); the file must hold it",
     "FLUXALL can be left out",
     "**No changes to SCHEDULE**",
 ], x=x2, w=cw, h=Inches(2.7), size=18)
 caption(s, "The print file reports", x2, TOP + Inches(2.85), cw, size=15, align=PP_ALIGN.LEFT)
 code(s, """USEFLUX: 157 boundary record(s) read from
   'DUMP-SECTOR.FLUX' (per time step),
-  interpolated in time between records
+  interpolated in time between records,
+  imposed as pressure boundaries
 USEFLUX: summary vectors loaded from flux
   file 'DUMP-SECTOR.FLUX' (176 keys, ...)
 USEFLUX: adopted the producing run's
@@ -529,13 +530,13 @@ caption(s, "Parent: the whole field", x1, TOP + Inches(4.9), cw, size=16)
 caption(s, "Reduced run on the parent deck: only the sector is active", x2, TOP + Inches(4.9), cw, size=16)
 
 s = new_slide("Example 1  ·  Flux boundaries")
-caption(s, "Only FLUXTYPE in the parent changes, and the reduced deck names the new file",
+caption(s, "FLUXTYPE changes in both decks, and the reduced deck names the new file",
         LEFT, TOP - Inches(0.05), FULL_W, size=17, align=PP_ALIGN.LEFT)
 code(s, """-- parent, DUMP-SECTOR-FLUX.DATA       -- reduced, USE-SECTOR-FLUX.DATA
 DUMPFLUX                               USEFLUX
                                          'DUMP-SECTOR-FLUX' /
-FLUXTYPE                               FLUXREG
-  'FLUX' /                               1 /""", LEFT, TOP + Inches(0.45), Inches(9.2), Inches(1.75), size=15)
+FLUXTYPE                               FLUXTYPE
+  'FLUX' /                               'FLUX' /""", LEFT, TOP + Inches(0.45), Inches(9.2), Inches(1.75), size=15)
 bullets(s, [
     "A flux-mode file only holds component mass rates per face: **9.7 MB** instead of 34 MB",
     "The reduced run imposes the parent's rates: the closest match, but no response to changes",
