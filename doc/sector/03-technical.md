@@ -81,14 +81,18 @@ For a pressure boundary, `updateFluxDumpers_()` records for every face the
 state of the exterior cell at the end of the record's interval:
 
 * pressure of the oil phase, or of the first active phase without oil,
-* water and gas saturation, Rs, Rv and temperature,
+* water and gas saturation, Rs and Rv,
 * relative permeability and capillary pressure of every active phase, read
   from the converged state, so that the cell's saturation region, scaled end
   points and hysteresis state are all included.
 
+A thermal run also records the exterior temperature, in either mode, since
+both kinds of boundary carry the enthalpy of what enters.
+
 The static part of the file records, per face, the transmissibility the
 parent had across the face, the PVT region, the equilibration region and the
-depth of the exterior cell.
+depth of the exterior cell, and in a thermal run the thermal transmissibility
+across the face, both half-cells in series.
 
 ### Other data
 
@@ -139,6 +143,7 @@ are in SI units; times are in seconds from the start of the run.
 | `FLXPVTN` | INTE | faces | PVT region of the exterior cell. |
 | `FLXEXDP` | DOUB | faces | Depth of the centre of the exterior cell. |
 | `FLXEQLN` | INTE | faces | Equilibration region of the exterior cell, zero-based. |
+| `FLXTHTR` | DOUB | faces | Thermal transmissibility across the face, both half-cells in series. Thermal runs only. |
 | `FLXTHPR` | DOUB | n² | Threshold pressures; entry `r1*n + r2` is for flow from region r1 to r2. Optional. |
 | `FLXMINT` | DOUB | 1 | Minimum interval between boundary records the producer enforced. |
 | `FLXPSTRT` … `FLXGEFAC` | | | Parent wells, see below. Optional. |
@@ -181,7 +186,8 @@ face-major: all phases, or all values, of the first face come first.
 | `FLXMASS` | faces × phases | Component masses per second, positive into the sector. Flux mode. |
 | `FLXPRES` | faces | Exterior pressure. Pressure mode. |
 | `FLXSATW`, `FLXSATG` | faces | Exterior water and gas saturation. Pressure mode. |
-| `FLXRS`, `FLXRV`, `FLXTEMP` | faces | Exterior Rs, Rv and temperature. Pressure mode, optional. |
+| `FLXRS`, `FLXRV` | faces | Exterior Rs and Rv. Pressure mode, optional. |
+| `FLXTEMP` | faces | Exterior temperature. Thermal runs, either mode. |
 | `FLXKR`, `FLXPC` | faces × phases | Exterior relative permeability and capillary pressure, phases in the order oil, water, gas. Pressure mode, optional. |
 | `FLXRCON` | 16 | Pore-volume weighted sums outside the region. |
 
@@ -261,6 +267,11 @@ each component, divided by the face area, with the sign changed to the
 outward normal that the discretisation uses. Since the rates are component
 masses, nothing about the fluid outside the sector is needed to impose them.
 
+In a thermal run the face also carries the enthalpy of those masses, at the
+recorded exterior temperature for what enters and at the interior cell's for
+what leaves, and conducts heat through `FLXTHTR`;
+`fluxBoundaryEnergyRate_()` forms that energy rate.
+
 ### Pressure boundary
 
 In pressure mode, every face the file describes is a free boundary. The
@@ -276,7 +287,9 @@ $$
 with these ingredients:
 
 * **Transmissibility.** The parent's transmissibility between the two
-  cells, `FLUXTRAN`.
+  cells, `FLUXTRAN`, and in a thermal run its thermal transmissibility,
+  `FLXTHTR`, since the temperature imposed is the exterior cell's at its
+  centre.
 * **Exterior state.** `fluxExteriorFluidState_()` builds the fluid state on
   the far side from the record: pressure, saturations, Rs, Rv and
   temperature, the phase pressures from the recorded capillary pressures, and
@@ -372,13 +385,11 @@ since there is no face to impose it on, it uses both cells' centre depths
 with the average density, which is exactly the parent's formula above: an
 NNC face needs no depth correction and carries no residual error from one.
 
-The differences from an ordinary face are minor:
-
-* The flow through NNC faces is not reported in the reduced run's FLOWS and
-  FLORES output, which only cover grid connections and boundary faces; it is
-  part of the cell's source term.
-* Only the black-oil components are carried. The ordinary faces also carry
-  enthalpy in thermal runs.
+The one difference from an ordinary face is that the flow through NNC faces
+is not reported in the reduced run's FLOWS and FLORES output, which only
+cover grid connections and boundary faces; it is part of the cell's source
+term. In a thermal run an NNC face carries enthalpy and conducts heat
+through `FLXTHTR`, as an ordinary face does.
 
 In flux mode, an NNC face adds the recorded component masses to the source
 term, a fixed rate like that of an ordinary face in flux mode.

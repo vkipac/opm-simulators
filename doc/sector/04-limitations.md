@@ -3,9 +3,10 @@
 * **Black-oil models only.** DUMPFLUX and USEFLUX work with the black-oil
   simulators. A compositional run that would write a FLUX file stops with an
   error. Water-borne gas (Rsw) and vaporised water (Rvw), solvent, polymer,
-  brine, energy and tracers are not carried across the boundary: the fluid
-  entering the sector has no solvent, polymer, salt or tracer, and its
-  temperature is the recorded one only for thermal runs.
+  brine and tracers are not carried across the boundary: the fluid entering
+  the sector has no solvent, polymer, salt or tracer. In thermal runs the
+  boundary carries enthalpy and conducts heat, with the exterior temperature
+  and thermal transmissibility the parent recorded.
 
 * **One sector per reduced run.** A FLUX file describes one FLUXNUM region,
   and a reduced run covers one region. FLUXREG accepts a list of regions,
