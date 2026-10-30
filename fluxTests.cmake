@@ -770,4 +770,18 @@ if (BUILD_FLOW)
         -p "bash ${PROJECT_SOURCE_DIR}/tests/check-twowell-useflux-cadence-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${OPM_COMPARE_ECL_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_DUMPFLUX_FLUX_1D.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_USEFLUX_FLUX_1D.DATA"
     )
   endif()
+
+  # A thermal sector, run on both kinds of boundary from one parent file.
+  if(OPM_SUMMARY_BIN)
+    set(_useflux_thermal_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_energy+useflux_thermal_smoke)
+    opm_add_test(useflux_thermal_smoke
+      EXE_TARGET
+        flow_energy
+      DRIVER_ARGS
+        -i ${PROJECT_SOURCE_DIR}/tests/data/sector
+        -r ${_useflux_thermal_result_path}
+        -f TWOWELL_DUMPFLUX_THERMAL_1D
+        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-useflux-thermal-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_energy ${OPM_SUMMARY_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_USEFLUX_THERMAL_1D.DATA"
+    )
+  endif()
 endif()
