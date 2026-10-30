@@ -1681,6 +1681,13 @@ protected:
         add(EclIO::FluxFile::Phase::Water, waterPhaseIdx);
         add(EclIO::FluxFile::Phase::Gas, gasPhaseIdx);
 
+        if (faceIndex < fluxData.boundaryFaces.size()) {
+            const auto alpha = fluxData.boundaryFaces[faceIndex].thermalTransmissibility;
+            if (alpha > 0.0) {
+                energy += getValue(intQuants->totalThermalConductivity()) * alpha * (tEx - tIn);
+            }
+        }
+
         return energy;
     }
 
