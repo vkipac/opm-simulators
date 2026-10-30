@@ -833,11 +833,12 @@ bullets(s, [
 ], x=x1, w=cw, size=18, gap=5)
 bullets(s, [
     "#Exterior state (pressure mode)",
-    "Pressure, Sw, Sg, Rs, Rv, T at the end of the interval",
+    "Pressure, Sw, Sg, Rs, Rv at the end of the interval",
     "kr and Pc of the exterior cell from the converged state: "
     "saturation region, scaling and hysteresis included",
     "Static: transmissibility, PVT and equilibration region, depth",
     "#Also recorded",
+    "Temperature and thermal transmissibility in thermal runs, either mode",
     "Pore-volume weighted sums outside the region, threshold pressures, "
     "parent wells per report step, summary samples",
     "Appended as formed; reduced to the I/O rank in parallel",
@@ -854,6 +855,7 @@ blocks = [
                         "`LOC2GLOB`: cells of the region",
                         "`FACECELL`, `FACEDIR`, `FACEGLNB`: faces",
                         "`FLUXTRAN`, `FLXPVTN`, `FLXEXDP`, `FLXEQLN`",
+                        "`FLXTHTR`: thermal transmissibility",
                         "`FLXTHPR`: threshold pressures",
                         "`FLXWELLS`, `FLXWGRP`, …: parent wells"], BLUE_CARD),
     ("Record blocks", ["`FLXSEQ`: block number, records",
@@ -861,6 +863,7 @@ blocks = [
                        "`FLXMASS`: mass rates (flux)",
                        "`FLXPRES`, `FLXSATW`, `FLXSATG`, `FLXRS`, `FLXRV` (pressure)",
                        "`FLXKR`, `FLXPC`",
+                       "`FLXTEMP`: temperature (thermal)",
                        "`FLXRCON`: sums outside"], ORANGE_CARD),
     ("Summary blocks", ["`SMRYSEQ`: block number, samples",
                         "`SMRYTIME`: end of each interval",
