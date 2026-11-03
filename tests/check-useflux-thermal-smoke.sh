@@ -13,13 +13,33 @@ set -euo pipefail
 # enthalpy of the fixed boundary rates the cells next to the ordinary faces
 # end up 6 to 8 C off in flux mode. With both in place the sector stays within
 # 1.1 C and 0.4 C of the parent.
+#
+# Given the producer deck as a fourth argument, the script runs the parent
+# itself, and both runs use the sequential temperature model (TEMP) instead of
+# THERMAL. Without the boundary terms of that model the sector cells end up 6
+# to 78 C off; with them, within 0.1 C and 0.6 C.
 
 flow_bin="$1"
 summary_bin="$2"
 consumer_deck="$3"
+producer_deck="${4:-}"
 
 producer_base="TWOWELL_DUMPFLUX_THERMAL_1D"
 consumer_base="$(basename "$consumer_deck" .DATA)"
+
+to_model() {
+    if [[ -n "$producer_deck" ]]; then
+        sed 's/^THERMAL$/TEMP/' "$1"
+    else
+        cat "$1"
+    fi
+}
+
+if [[ -n "$producer_deck" ]]; then
+    to_model "$producer_deck" > "${producer_base}.DATA"
+    "$flow_bin" "${producer_base}.DATA" --output-dir=. > dump.log 2>&1
+    grep -q "End of simulation" dump.log
+fi
 
 for array in FLXTEMP FLXTHTR; do
     if ! grep -a -q "$array" "${producer_base}.FLUX"; then
@@ -33,7 +53,7 @@ run_sector() {
     rm -rf "$mode"
     mkdir -p "$mode"
     cp "${producer_base}.FLUX" "$mode/${consumer_base}.FLUX"
-    sed "s/^  PRESSURE \/$/  ${mode} \//" "$consumer_deck" > "$mode/${consumer_base}.DATA"
+    sed "s/^  PRESSURE \/$/  ${mode} \//" <(to_model "$consumer_deck") > "$mode/${consumer_base}.DATA"
     (cd "$mode" && "$flow_bin" "${consumer_base}.DATA" --output-dir=. > use.log 2>&1)
     grep -q "End of simulation" "$mode/use.log"
 }

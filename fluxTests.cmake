@@ -783,5 +783,16 @@ if (BUILD_FLOW)
         -f TWOWELL_DUMPFLUX_THERMAL_1D
         -p "bash ${PROJECT_SOURCE_DIR}/tests/check-useflux-thermal-smoke.sh ${PROJECT_BINARY_DIR}/bin/flow_energy ${OPM_SUMMARY_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_USEFLUX_THERMAL_1D.DATA"
     )
+
+    # The same sector with the sequential temperature model (TEMP). The script
+    # runs the parent itself, as the decks say THERMAL.
+    set(_useflux_temp_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil_temp+useflux_temp_smoke)
+    file(MAKE_DIRECTORY ${_useflux_temp_result_path})
+    add_test(NAME useflux_temp_smoke
+      COMMAND bash ${PROJECT_SOURCE_DIR}/tests/check-useflux-thermal-smoke.sh
+              ${PROJECT_BINARY_DIR}/bin/flow_blackoil_temp ${OPM_SUMMARY_BIN}
+              ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_USEFLUX_THERMAL_1D.DATA
+              ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_DUMPFLUX_THERMAL_1D.DATA
+      WORKING_DIRECTORY ${_useflux_temp_result_path})
   endif()
 endif()
