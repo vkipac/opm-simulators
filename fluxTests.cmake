@@ -644,6 +644,19 @@ if (BUILD_FLOW)
         -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-cutout-wells.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_BINARY_DIR}/bin/make_flux ${OPM_SUMMARY_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_CUTOUT_PARENT_1D.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_CUTOUT_SECTOR_1D.DATA"
     )
 
+    # The same sector with --flux-fpr-as-fprflux=true: its UDQ on FPR reads
+    # FPRFLUX instead.
+    set(_flux_fpr_as_fprflux_result_path ${PROJECT_BINARY_DIR}/tests/results/flux/flow_blackoil+flux_fpr_as_fprflux_smoke)
+    opm_add_test(flux_fpr_as_fprflux_smoke
+      EXE_TARGET
+        flow_blackoil
+      DRIVER_ARGS
+        -i ${PROJECT_SOURCE_DIR}/tests/data/sector
+        -r ${_flux_fpr_as_fprflux_result_path}
+        -f TWOWELL_CUTOUT_PARENT_1D
+        -p "bash ${PROJECT_SOURCE_DIR}/tests/check-flux-fpr-as-fprflux.sh ${PROJECT_BINARY_DIR}/bin/flow_blackoil ${PROJECT_BINARY_DIR}/bin/make_flux ${OPM_SUMMARY_BIN} ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_CUTOUT_PARENT_1D.DATA ${PROJECT_SOURCE_DIR}/tests/data/sector/TWOWELL_CUTOUT_SECTOR_1D.DATA"
+    )
+
     # Same again, for a sector whose group target is a UDA. The correction
     # that removes the absent wells' share of that target reads two things
     # that used to be answered rank by rank: which wells the sector holds,

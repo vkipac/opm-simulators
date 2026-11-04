@@ -1139,6 +1139,7 @@ list (APPEND PUBLIC_HEADER_FILES
   opm/simulators/flow/FlowUtils.hpp
   opm/simulators/flow/FlowsData.hpp
   opm/simulators/flow/FlowThresholdPressure.hpp
+  opm/simulators/flow/FluxParameters.hpp
   opm/simulators/flow/GeochemistryContainer.hpp
   opm/simulators/flow/GenericCpGridVanguard.hpp
   opm/simulators/flow/GenericOutputModule.hpp
