@@ -484,6 +484,10 @@ void FlowGenericVanguard::registerParameters_()
     Parameters::Register<Parameters::MinpvMergeCells>
         ("Merge the cells that MINPV removes into the cell below, instead of collapsing them and connecting the cells "
          "above and below (only for PolyhedralGrid).");
+    Parameters::Register<Parameters::FluxFprAsFprflux>
+        ("In a USEFLUX (sector) run, evaluate FPR as FPRFLUX, the field pressure "
+         "averaged over the whole parent model, in UDQ definitions and ACTIONX "
+         "conditions. The FPR summary vector is still the parent's.");
 
 #if HAVE_MPI
     Parameters::Register<Parameters::AddCorners>
