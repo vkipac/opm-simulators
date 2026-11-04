@@ -484,6 +484,13 @@ void FlowGenericVanguard::registerParameters_()
     Parameters::Register<Parameters::MinpvMergeCells>
         ("Merge the cells that MINPV removes into the cell below, instead of collapsing them and connecting the cells "
          "above and below (only for PolyhedralGrid).");
+    Parameters::Register<Parameters::FluxReplayActions>
+        ("In a USEFLUX (sector) run, trigger each ACTIONX whose condition reads "
+         "quantities the sector cannot compute itself (field, group and region "
+         "quantities, wells and cells outside the sector, and UDQs of these) when "
+         "the parent run triggered it, with the wells it matched, as recorded in "
+         "the FLUX file by make_flux. The others are evaluated as usual. When "
+         "false, every ACTIONX condition is evaluated in the sector run.");
     Parameters::Register<Parameters::FluxFprAsFprflux>
         ("In a USEFLUX (sector) run, evaluate FPR as FPRFLUX, the field pressure "
          "averaged over the whole parent model, in UDQ definitions and ACTIONX "
