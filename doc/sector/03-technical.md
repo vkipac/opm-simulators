@@ -172,6 +172,15 @@ summary keys, and three fields derived on read.
 | `FLXGPAR` | steps × groups | Parent group, one-based into FLXGRUPS, 0 for FIELD. |
 | `FLXGEFAC` | steps × groups | Group efficiency factor. |
 
+The parent's ACTIONX triggers, written by make_flux only:
+
+| Array | Size | Contents |
+|:--|:--|:--|
+| `FLXACTN` | triggers | Name of the action, in the order the parent triggered them. |
+| `FLXACTT` | triggers | Time of the trigger, in seconds since the start. |
+| `FLXACTC` | triggers | Number of wells the action matched. |
+| `FLXACTW` | matched wells | The wells each trigger matched, one after the other. |
+
 ### Record blocks
 
 Each block holds one or more boundary records and starts with `FLXSEQ`,
@@ -399,6 +408,19 @@ would need the problem to supply boundary connections that are not grid
 faces, with their own places in the boundary flux output and in the GPU
 assembly. It would only change where their flow is reported.
 
+### The sequential temperature model
+
+With TEMP instead of THERMAL, the temperature is solved after the flow
+equations, from the fluxes they found. Its boundary terms
+(`TemperatureModel::assembleBoundaryTerms_()`) carry, across every face with
+a boundary condition, the enthalpy of the flow equations' phase fluxes,
+upwinded as there, and conduct heat to the exterior temperature. USEFLUX
+faces that are NNCs enter the flow equations as sources, and their energy
+terms come from the same per-face computation
+(`FlowProblemBlackoil::fluxNncEnergyTerms()`). Without these terms, the fluid
+crossing the boundary would take no enthalpy along, and the temperature of
+the cells at the boundary would drift to keep their energy.
+
 ## Parent coupling in the reduced run
 
 ### Parent summary
@@ -479,6 +501,36 @@ parent reported (`FIPRegionStatistics::raiseMaximumRegionID()`). A UDQ used
 as a group target keeps its start-of-step value, as in the parent, and is
 the same on every rank.
 
+### ACTIONX
+
+An ACTIONX condition that reads quantities the sector does not compute
+itself is evaluated on the parent's values at the parent's sampling. A
+condition the parent met only between two of its samples, or only just, may
+then come out otherwise, and the action happen at another time or not at
+all. make_flux therefore records the parent's triggers from its PRT file,
+with the wells each matched.
+
+A reduced run sorts the schedule's actions on the I/O rank
+(`ActionHandler::setupFluxActionReplay()`). An action is replayed if one of
+its conditions reads a field or region quantity, a quantity of a well or a
+cell outside the sector or of a group with such a well, or a UDQ that
+depends on one of these. A replayed action is triggered at the end of the
+time step that reaches the parent's trigger time, with the wells the parent
+matched, and its condition is not evaluated. The other actions are evaluated
+as usual. The print file lists which actions are replayed, and why, and
+reports every replayed trigger with the parent's time.
+`--flux-replay-actions=false` evaluates every condition in the run. A FLUX
+file written by DUMPFLUX records no triggers, and every condition is then
+evaluated, with a warning.
+
+### FPR in UDQs and ACTIONX
+
+With `--flux-fpr-as-fprflux=true`, UDQ definitions and ACTIONX conditions
+that read FPR are rewritten to read FPRFLUX before the schedule is built, and
+the print file lists them. FPR is the parent's value at the parent's samples,
+while FPRFLUX follows the field pressure at every time step of the run (see
+below). The FPR summary vector itself is not affected.
+
 ### Field pressure and rate conversion
 
 The external pore-volume weighted sums of the record covering the step are
@@ -528,6 +580,9 @@ make_flux builds the same file from the parent's output:
   file. `--summary-min-interval` thins the summary, averaging rates over
   what each sample covers, and `--smry-define` supplies a vector the parent
   did not write.
+* **ACTIONX triggers** from the parent's PRT file, by default the one next to
+  the parent (`--parent-prt`, or `--no-parent-actions` to leave them out),
+  for the reduced run to replay.
 
 ## Run-time parameters {#run-time-parameters}
 
@@ -548,6 +603,15 @@ make_flux builds the same file from the parent's output:
 
 Report step boundaries are always written, whatever the interval.
 
+`--flux-replay-actions` (default true)
+:   In a reduced run, trigger the ACTIONX whose conditions read quantities
+    the sector does not compute itself when the parent triggered them, as
+    recorded by make_flux, instead of evaluating their conditions.
+
+`--flux-fpr-as-fprflux` (default false)
+:   In a reduced run, read FPR as FPRFLUX in UDQ definitions and ACTIONX
+    conditions.
+
 ## Tests
 
 The tests are in `fluxTests.cmake`, with the decks in `tests/flux` and
@@ -556,5 +620,6 @@ the dumper, the boundary reader and the parent summary. The integration
 tests run a parent and a reduced run and compare them, for both boundary
 types, in serial and in parallel, with NNC and fault boundaries, threshold
 pressures, interpolation in time, wells outside the sector under group
-control, UDQs over regions outside the sector, and make_flux against
-DUMPFLUX.
+control, UDQs over regions outside the sector, thermal sectors with THERMAL
+and with TEMP, FPR read as FPRFLUX, ACTIONX replayed from the parent's
+triggers, and make_flux against DUMPFLUX.

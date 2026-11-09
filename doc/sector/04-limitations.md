@@ -4,9 +4,10 @@
   simulators. A compositional run that would write a FLUX file stops with an
   error. Water-borne gas (Rsw) and vaporised water (Rvw), solvent, polymer,
   brine and tracers are not carried across the boundary: the fluid entering
-  the sector has no solvent, polymer, salt or tracer. In thermal runs the
-  boundary carries enthalpy and conducts heat, with the exterior temperature
-  and thermal transmissibility the parent recorded.
+  the sector has no solvent, polymer, salt or tracer. In thermal runs, with
+  THERMAL or with the sequential temperature model (TEMP), the boundary
+  carries enthalpy and conducts heat, with the exterior temperature and
+  thermal transmissibility the parent recorded.
 
 * **One sector per reduced run.** A FLUX file describes one FLUXNUM region,
   and a reduced run covers one region. FLUXREG accepts a list of regions,
@@ -30,6 +31,9 @@
   fixed. ACTIONX conditions and UDQs see the parent's values for everything
   the sector cannot compute; an ACTIONX that would have acted on a well
   outside the sector changes that well in the schedule, but not its rates.
+  An action replayed from the parent's triggers happens when it did in the
+  parent, whatever changed inside the sector, and only make_flux records
+  the triggers: with a DUMPFLUX file every condition is evaluated.
 
 * **Same grid geometry.** A reduced run must use either the parent grid, or
   a grid of the dimensions of the region's bounding box with the same cells.

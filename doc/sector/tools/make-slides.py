@@ -407,8 +407,9 @@ bullets(s, [
     "the wells inside get the share of group targets they had",
     "**FOPR, FOPT** and group vectors are whole-field values, comparable with the parent",
     "**UDQs, UDAs and ACTIONX** see the parent's values for whatever the sector cannot compute",
+    "**ACTIONX** on such values is triggered when the parent triggered it (FLUX files from make_flux)",
     "A cut-out deck gets the parent's missing wells **added automatically**",
-], x=x2, w=cw, size=21, gap=8)
+], x=x2, w=cw, size=20, gap=7)
 notes(s, """Group controls, UDQs and ACTIONX are normally written for the
 whole field. The reduced run uses the parent's values for the outside of the
 sector, so that the wells inside behave as they did in the parent.""")
@@ -768,7 +769,7 @@ bullets(s, [
 
 s = new_slide("Limitations")
 bullets(s, [
-    "**Black-oil only**; no solvent, polymer, brine or tracers across the boundary",
+    "**Black-oil only**, also thermal (THERMAL or TEMP); no solvent, polymer, brine or tracers across the boundary",
     "**One sector per reduced run**, and each well within a single FLUXNUM region",
     "**No feedback to the outside**: the boundary and the outside wells follow the parent",
     "**Same grid geometry**: the parent grid or the sector's bounding box, no refinement or coarsening",
@@ -857,7 +858,8 @@ blocks = [
                         "`FLUXTRAN`, `FLXPVTN`, `FLXEXDP`, `FLXEQLN`",
                         "`FLXTHTR`: thermal transmissibility",
                         "`FLXTHPR`: threshold pressures",
-                        "`FLXWELLS`, `FLXWGRP`, …: parent wells"], BLUE_CARD),
+                        "`FLXWELLS`, `FLXWGRP`, …: parent wells",
+                        "`FLXACTN`, …: ACTIONX triggers"], BLUE_CARD),
     ("Record blocks", ["`FLXSEQ`: block number, records",
                        "`FLXTIME`, `FLXDT`: interval",
                        "`FLXMASS`: mass rates (flux)",
@@ -872,7 +874,7 @@ blocks = [
                         "Rates are interval averages"], GREEN_CARD),
 ]
 for i, (head, items, fill) in enumerate(blocks):
-    card(s, LEFT + i * (cw + Inches(0.3)), TOP + Inches(0.85), cw, Inches(4.25), head, items, fill, size=16)
+    card(s, LEFT + i * (cw + Inches(0.3)), TOP + Inches(0.85), cw, Inches(4.25), head, items, fill, size=15)
 caption(s, "FACEDIR: 1 I+, 2 I−, 4 J+, 8 J−, 16 K+, 32 K−, 0 NNC.   Mode: 1 flux, 2 pressure, 3 both.   "
         "Phase mask: 1 oil, 2 water, 4 gas.", LEFT, TOP + Inches(5.2), FULL_W, size=13, align=PP_ALIGN.LEFT)
 
@@ -937,7 +939,10 @@ bullets(s, [
     "with the regions the parent reported",
     "A UDQ group target keeps its start-of-step value, the same on every rank",
     "FPRFLUX and RESV rate conversion add the parent's outside sums to the sector's own",
-], size=20, gap=7)
+    "**ACTIONX** reading quantities outside the sector: triggered when the parent "
+    "triggered it, with the wells it matched; the others are evaluated",
+    "`--flux-fpr-as-fprflux=true`: UDQs and ACTIONX read FPR as FPRFLUX",
+], size=18, gap=5)
 
 s = new_slide("make_flux in more detail", optional=True)
 bullets(s, [
@@ -951,7 +956,8 @@ bullets(s, [
     "used but THRESHPR missing (e.g. `NORST=1`)",
     "**Summary**: as DUMPFLUX, from the summary file; `--summary-min-interval` "
     "thins it, `--smry-define` supplies a missing vector",
-], size=21, gap=10)
+    "**ACTIONX triggers** from the parent's PRT file, for the sector run to replay",
+], size=20, gap=8)
 
 s = new_slide("Run-time parameters and inspection", optional=True)
 table(s, [
@@ -960,18 +966,20 @@ table(s, [
     ["`--flux-boundary-report-steps-only`", "false", "Boundary records at report steps only"],
     ["`--flux-summary-min-interval-between-samples`", "1 day", "Minimum time between summary samples"],
     ["`--flux-boundary-interpolate`", "true", "Interpolate the boundary state in time"],
-], LEFT, TOP - Inches(0.05), FULL_W, [5.2, 1.0, 5.0], size=13, row_h=0.42)
+    ["`--flux-replay-actions`", "true", "Replay the parent's ACTIONX triggers recorded by make_flux"],
+    ["`--flux-fpr-as-fprflux`", "false", "Read FPR as FPRFLUX in UDQs and ACTIONX conditions"],
+], LEFT, TOP - Inches(0.05), FULL_W, [5.2, 1.0, 5.0], size=13, row_h=0.38)
 caption(s, "`inspect_flux` prints the boundary of one cell as a time series, or embedded summary vectors",
-        LEFT, TOP + Inches(2.3), FULL_W, size=15, align=PP_ALIGN.LEFT)
+        LEFT, TOP + Inches(2.75), FULL_W, size=15, align=PP_ALIGN.LEFT)
 code(s, """$ inspect_flux DUMP-SECTOR.FLUX 10 50 5 --start-date=2018-01-01
   parent case      DUMP-SECTOR
   records          157
   I-     exterior cell     15694       (9,50,5)  transmissibility 4.664e-13 m3.Pa.s  pvt region 1
 #       DATE      I-:PRES      I-:SWAT      I-:SGAS        I-:RS        I-:RV  ...
   2018-01-01    3.015e+07       0.6966            0        140.8    0.0002351  ...""",
-     LEFT, TOP + Inches(2.75), FULL_W, Inches(1.85), size=12)
+     LEFT, TOP + Inches(3.15), FULL_W, Inches(1.85), size=12)
 caption(s, "Tests: `fluxTests.cmake`, decks in `tests/flux` and `tests/data/sector`",
-        LEFT, TOP + Inches(4.8), FULL_W, size=15, align=PP_ALIGN.LEFT)
+        LEFT, TOP + Inches(5.15), FULL_W, size=15, align=PP_ALIGN.LEFT)
 
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "sector-modelling.pptx"
