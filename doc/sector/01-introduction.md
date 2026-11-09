@@ -144,6 +144,10 @@ field:
 * UDQs, UDAs and ACTIONX conditions are evaluated with the parent's values
   for every quantity the sector cannot compute itself, such as the rates of
   wells outside it or the pressure of a region it does not contain.
+* An ACTIONX whose condition reads such quantities is triggered when the
+  parent triggered it, with the wells it matched, if the FLUX file was built
+  by make_flux. Evaluated on the parent's values at the parent's sampling,
+  the condition could otherwise come out at another time, or not at all.
 * Rate conversion for wells on reservoir volume control, and the FPRFLUX
   summary vector, average over the whole parent model rather than over the
   sector alone.
@@ -188,7 +192,14 @@ brings a reduced run close to what a DUMPFLUX file gives.
   reduced run gives the same results whatever the number of processes.
 * **inspect_flux.** A command-line tool that prints the boundary data a FLUX
   file holds for one cell, or the embedded summary vectors, as a time series.
+* **Thermal sectors.** With THERMAL or with the sequential temperature model
+  (TEMP), the boundary carries the enthalpy of what crosses it and conducts
+  heat, with the exterior temperature the parent recorded.
+* **FPR in UDQs and ACTIONX.** With `--flux-fpr-as-fprflux=true`, a reduced
+  run reads FPR as FPRFLUX in UDQ definitions and ACTIONX conditions, so
+  that they follow the field pressure as it develops in the run.
 * **Run-time parameters** control how often DUMPFLUX writes boundary records
-  and summary samples, and whether the reduced run interpolates the boundary
-  state in time. They are listed in the [technical
+  and summary samples, whether the reduced run interpolates the boundary
+  state in time, and whether it replays the parent's ACTIONX triggers and
+  reads FPR as FPRFLUX. They are listed in the [technical
   documentation](03-technical.md#run-time-parameters).
