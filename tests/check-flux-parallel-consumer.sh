@@ -49,6 +49,18 @@ run_consumer() {
 run_consumer serial
 run_consumer parallel mpirun -np "$num_ranks" --oversubscribe
 
+# Wells outside the sector lose their connections with the cells around them,
+# which is how a sector run is meant to treat them, not something to warn about
+# while the schedule is read. An ACTIONX opening one at run time still says so.
+setup_log() {
+    awk '/Starting time step/ { exit } { print }' "$1"
+}
+if setup_log consumer_serial.log | grep -qE "is not active and the connection will be ignored|has no connections to grid" \
+   || setup_log consumer_parallel.log | grep -qE "is not active and the connection will be ignored|has no connections to grid"; then
+    echo "check-flux-parallel-consumer: the consumer warned about the connections of wells outside the sector" >&2
+    exit 1
+fi
+
 last_value() {
     "$summary_bin" "$1/${consumer_base}.SMSPEC" "$2" 2>/dev/null \
         | awk 'NF { value = $1 } END { print value }'

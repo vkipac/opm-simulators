@@ -546,8 +546,19 @@ namespace {
             : FluxParentWellSource{};
 
         auto scheduleContext = std::optional<Opm::ParseContext>{};
-        if (!fluxParentWells.wells.empty() && (parseContext != nullptr)) {
+        if (eclipseState->getIOConfig().getUseFlux() && (parseContext != nullptr)) {
             scheduleContext.emplace(*parseContext);
+
+            // Every cell outside the sector was deactivated above, so every
+            // connection of a well outside it, and every time such a well is
+            // opened, would be reported. The parent run has already reported
+            // those that are a problem in the deck itself.
+            scheduleContext->update(Opm::ParseContext::SCHEDULE_COMPDAT_INACTIVE_CELL,
+                                    Opm::InputErrorAction::IGNORE);
+            scheduleContext->update(Opm::ParseContext::SCHEDULE_WELL_NO_CONNECTIONS,
+                                    Opm::InputErrorAction::IGNORE);
+        }
+        if (!fluxParentWells.wells.empty() && scheduleContext.has_value()) {
             for (const auto& key : { Opm::ParseContext::UDQ_DEFINE_CANNOT_EVAL,
                                      Opm::ParseContext::RUNSPEC_NUMWELLS_TOO_LARGE,
                                      Opm::ParseContext::RUNSPEC_NUMGROUPS_TOO_LARGE,
